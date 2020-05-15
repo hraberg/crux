@@ -79,6 +79,10 @@
 
 (def ^:const ^:private max-string-index-length 128)
 
+(def ^:const ^:private string-terminate-mark (byte 1))
+(def ^:const ^:private string-terminate-mark-size Byte/BYTES)
+(def ^:private ^{:tag 'byte} string-char-offset (byte 2))
+
 (defprotocol IdOrBuffer
   (new-id ^crux.codec.Id [id])
   (->id-buffer ^org.agrona.DirectBuffer [this]))
@@ -203,18 +207,15 @@
     (if (< max-string-index-length (count this))
       (doto (id-function to (nippy/fast-freeze this))
         (.putByte 0 (byte object-value-type-id)))
-      (let [terminate-mark (byte 1)
-            terminate-mark-size Byte/BYTES
-            offset (byte 2)
-            ub-in (mem/on-heap-buffer (.getBytes this StandardCharsets/UTF_8))
+      (let [ub-in (mem/on-heap-buffer (.getBytes this StandardCharsets/UTF_8))
             length (.capacity ub-in)]
         (.putByte to 0 string-value-type-id)
         (loop [idx 0]
           (if (= idx length)
-            (do (.putByte to (inc idx) terminate-mark)
-                (mem/limit-buffer to (+ length value-type-id-size terminate-mark-size)))
+            (do (.putByte to (inc idx) string-terminate-mark)
+                (mem/limit-buffer to (+ length value-type-id-size string-terminate-mark-size)))
             (let [b (.getByte ub-in idx)]
-              (.putByte to (inc idx) (byte (+ offset b)))
+              (.putByte to (inc idx) (byte (+ string-char-offset b)))
               (recur (inc idx))))))))
 
   nil
@@ -272,15 +273,13 @@
     (Double/longBitsToDouble l)))
 
 (defn- decode-string ^String [^DirectBuffer buffer]
-  (let [terminate-mark-size Byte/BYTES
-        offset (byte 2)
-        length (- (.capacity buffer) terminate-mark-size)
+  (let [length (- (.capacity buffer) string-terminate-mark-size)
         bs (byte-array (- length value-type-id-size))]
     (loop [idx value-type-id-size]
       (if (= idx length)
         (String. bs StandardCharsets/UTF_8)
         (let [b (.getByte buffer idx)]
-          (aset bs (dec idx) (unchecked-byte (- b offset)))
+          (aset bs (dec idx) (unchecked-byte (- b string-char-offset)))
           (recur (inc idx)))))))
 
 ;; TODO: Booleans should really have their own value type and encode
@@ -558,13 +557,13 @@
      (doto b
        (.putByte 0 content-hash->doc-index-id)
        (.putBytes index-id-size (mem/as-buffer content-hash) 0 (.capacity content-hash)))
-     (+ index-id-size id-size))))
+     (+ index-id-size (.capacity content-hash)))))
 
 (defn decode-doc-key-from ^crux.codec.Id [^MutableDirectBuffer k]
   (assert (= (+ index-id-size id-size) (.capacity k)) (mem/buffer->hex k))
   (let [index-id (.getByte k 0)]
     (assert (= content-hash->doc-index-id index-id))
-    (Id. (mem/slice-buffer k index-id-size id-size) 0)))
+    (Id. (mem/slice-buffer k index-id-size (.capacity k)) 0)))
 
 (defn encode-avec-key-to
   (^org.agrona.MutableDirectBuffer[b attr]
@@ -584,11 +583,11 @@
      (mem/limit-buffer
       (doto b
         (.putByte 0 avec-index-id)
-        (.putBytes index-id-size attr 0 id-size)
-        (.putBytes (+ index-id-size id-size) v 0 (.capacity v))
-        (.putBytes (+ index-id-size id-size (.capacity v)) entity 0 (.capacity entity))
-        (.putBytes (+ index-id-size id-size (.capacity v) (.capacity entity)) content-hash 0 (.capacity content-hash)))
-      (+ index-id-size id-size (.capacity v) (.capacity entity) (.capacity content-hash))))))
+        (.putBytes index-id-size attr 0 (.capacity attr))
+        (.putBytes (+ index-id-size (.capacity attr)) v 0 (.capacity v))
+        (.putBytes (+ index-id-size (.capacity attr) (.capacity v)) entity 0 (.capacity entity))
+        (.putBytes (+ index-id-size (.capacity attr) (.capacity v) (.capacity entity)) content-hash 0 (.capacity content-hash)))
+      (+ index-id-size (.capacity attr) (.capacity v) (.capacity entity) (.capacity content-hash))))))
 
 (defrecord EntityValueContentHash [eid value content-hash])
 
@@ -621,11 +620,11 @@
      (mem/limit-buffer
       (doto b
         (.putByte 0 aecv-index-id)
-        (.putBytes index-id-size attr 0 id-size)
-        (.putBytes (+ index-id-size id-size) entity 0 (.capacity entity))
-        (.putBytes (+ index-id-size id-size (.capacity entity)) content-hash 0 (.capacity content-hash))
-        (.putBytes (+ index-id-size id-size (.capacity entity) (.capacity content-hash)) v 0 (.capacity v)))
-      (+ index-id-size id-size (.capacity entity) (.capacity content-hash) (.capacity v))))))
+        (.putBytes index-id-size attr 0 (.capacity attr))
+        (.putBytes (+ index-id-size (.capacity attr)) entity 0 (.capacity entity))
+        (.putBytes (+ index-id-size (.capacity attr) (.capacity entity)) content-hash 0 (.capacity content-hash))
+        (.putBytes (+ index-id-size (.capacity attr) (.capacity entity) (.capacity content-hash)) v 0 (.capacity v)))
+      (+ index-id-size (.capacity attr) (.capacity entity) (.capacity content-hash) (.capacity v))))))
 
 (defn decode-aecv-key->evc-from
   ^crux.codec.EntityValueContentHash [^DirectBuffer k]
@@ -646,7 +645,7 @@
      (doto b
        (.putByte 0 meta-key->value-index-id)
        (.putBytes index-id-size k 0 (.capacity k)))
-     (+ index-id-size id-size))))
+     (+ index-id-size (.capacity k)))))
 
 (defn- descending-long ^long [^long l]
   (bit-xor (bit-not l) Long/MIN_VALUE))
@@ -679,11 +678,11 @@
      (.putByte b 0 entity+vt+tt+tx-id->content-hash-index-id)
      (.putBytes b index-id-size entity 0 (.capacity entity))
      (when valid-time
-       (.putLong b (+ index-id-size id-size) (date->reverse-time-ms valid-time) ByteOrder/BIG_ENDIAN))
+       (.putLong b (+ index-id-size (.capacity entity)) (date->reverse-time-ms valid-time) ByteOrder/BIG_ENDIAN))
      (when transact-time
-       (.putLong b (+ index-id-size id-size Long/BYTES) (date->reverse-time-ms transact-time) ByteOrder/BIG_ENDIAN))
+       (.putLong b (+ index-id-size (.capacity entity) Long/BYTES) (date->reverse-time-ms transact-time) ByteOrder/BIG_ENDIAN))
      (when tx-id
-       (.putLong b (+ index-id-size id-size Long/BYTES Long/BYTES) (descending-long tx-id) ByteOrder/BIG_ENDIAN))
+       (.putLong b (+ index-id-size (.capacity entity) Long/BYTES Long/BYTES) (descending-long tx-id) ByteOrder/BIG_ENDIAN))
      (->> (+ index-id-size (.capacity entity)
              (maybe-long-size valid-time) (maybe-long-size transact-time) (maybe-long-size tx-id))
           (mem/limit-buffer b)))))
@@ -738,10 +737,10 @@
      (.putByte b 0 entity+z+tx-id->content-hash-index-id)
      (.putBytes b index-id-size entity 0 (.capacity entity))
      (when z
-       (.putLong b (+ index-id-size id-size) upper-morton ByteOrder/BIG_ENDIAN)
-       (.putLong b (+ index-id-size id-size Long/BYTES) lower-morton ByteOrder/BIG_ENDIAN))
+       (.putLong b (+ index-id-size (.capacity entity)) upper-morton ByteOrder/BIG_ENDIAN)
+       (.putLong b (+ index-id-size (.capacity entity) Long/BYTES) lower-morton ByteOrder/BIG_ENDIAN))
      (when tx-id
-       (.putLong b (+ index-id-size id-size Long/BYTES Long/BYTES) (descending-long tx-id) ByteOrder/BIG_ENDIAN))
+       (.putLong b (+ index-id-size (.capacity entity) Long/BYTES Long/BYTES) (descending-long tx-id) ByteOrder/BIG_ENDIAN))
      (->> (+ index-id-size (.capacity entity) (if z (* 2 Long/BYTES) 0) (maybe-long-size tx-id))
           (mem/limit-buffer b)))))
 
