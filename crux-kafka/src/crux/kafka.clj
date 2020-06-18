@@ -170,14 +170,8 @@
          (.send producer)))
   (.flush producer))
 
-(defrecord KafkaDocumentStore [^KafkaProducer producer doc-topic
-                               kv-store object-store
+(defrecord KafkaDocumentStore [object-store
                                ^Thread indexing-thread !indexing-error]
-  Closeable
-  (close [_]
-    (.interrupt indexing-thread)
-    (.join indexing-thread))
-
   db/DocumentStore
   (submit-docs [this id-and-docs]
     (submit-docs id-and-docs this))
@@ -186,8 +180,7 @@
     (loop [indexed {}]
       (let [missing-ids (set/difference (set ids) (set (keys indexed)))
             indexed (merge indexed (when (seq missing-ids)
-                                     (with-open [snapshot (kv/new-snapshot kv-store)]
-                                       (db/get-objects object-store snapshot missing-ids))))]
+                                     (db/get-objects object-store nil missing-ids)))]
         (if (= (count indexed) (count ids))
           indexed
           (do
@@ -218,7 +211,7 @@
 (defn doc-record->id+doc [^ConsumerRecord doc-record]
   [(c/new-id (.key doc-record)) (.value doc-record)])
 
-(defn- index-doc-log [{:keys [bus object-store kv-store indexer !error]}
+(defn- index-doc-log [{:keys [indexer bus object-store !error]}
                       {:keys [::doc-topic ::group-id kafka-config]}]
   (let [tp-offsets (read-doc-offsets indexer)]
     (try
@@ -297,28 +290,46 @@
 (def document-store
   {:start-fn (fn [{::keys [producer admin-client], ::n/keys [indexer kv-store object-store bus] :as deps}
                   {::keys [doc-topic doc-partitions] :as options}]
+               (let [kafka-config (derive-kafka-config options)]
+                 (map->KafkaDocumentStore
+                  {:producer producer
+                   :doc-topic doc-topic
+                   :indexer indexer
+                   :kv-store kv-store
+                   :object-store object-store
+                   :bus bus
+                   :!indexing-error (atom nil)})))
+   :deps [::producer ::admin-client ::n/kv-store ::n/object-store ::n/bus]
+   :args default-options})
+
+(defrecord IndexingWorker [indexer ^Thread indexing-thread]
+  Closeable
+  (close [_]
+    (.interrupt indexing-thread)
+    (.join indexing-thread)))
+
+(def indexing-worker
+  {:start-fn (fn [{::keys [producer admin-client], ::n/keys [indexer object-store bus document-store] :as deps}
+                  {::keys [doc-topic doc-partitions] :as options}]
                (let [kafka-config (derive-kafka-config options)
-                     doc-store (map->KafkaDocumentStore
-                                {:producer producer
-                                 :doc-topic doc-topic
-                                 :indexer indexer
-                                 :kv-store kv-store
-                                 :object-store object-store
-                                 :bus bus
-                                 :!indexing-error (atom nil)})]
+                     indexing-worker (map->IndexingWorker {:bus bus
+                                                           :object-store object-store
+                                                           :indexer indexer
+                                                           :!error (:!indexing-error document-store)})]
                  (ensure-topic-exists admin-client doc-topic doc-topic-config doc-partitions options)
-                 (assoc doc-store
+                 (assoc indexing-worker
                         :indexing-thread
-                        (doto (Thread. #(index-doc-log doc-store (assoc options :kafka-config kafka-config)))
+                        (doto (Thread. #(index-doc-log indexing-worker (assoc options :kafka-config kafka-config)))
                           (.setName "crux-doc-consumer")
                           (.start)))))
-   :deps [::producer ::admin-client ::n/kv-store ::n/object-store ::n/indexer ::n/bus]
+   :deps [::producer ::admin-client ::n/object-store ::n/indexer ::n/bus ::n/document-store]
    :args default-options})
 
 (def topology
   (merge n/base-topology
          {:crux.node/tx-log tx-log
           :crux.node/document-store document-store
+          ::indexing-worker indexing-worker
           ::admin-client admin-client
           ::producer producer
           ::latest-submitted-tx-consumer latest-submitted-tx-consumer}))
