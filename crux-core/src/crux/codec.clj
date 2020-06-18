@@ -393,6 +393,11 @@
         (id->buffer id to)
         (id-function to (nippy/fast-freeze this)))))
 
+  Collection
+  (id->buffer [this to]
+    (id-function to (binding [*sort-unordered-colls* true]
+                      (nippy/fast-freeze this))))
+
   Map
   (id->buffer [this to]
     (id-function to (binding [*sort-unordered-colls* true]
