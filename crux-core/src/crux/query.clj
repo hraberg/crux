@@ -39,7 +39,7 @@
 (defn- expression-spec [sym spec]
   (s/and seq?
          #(= sym (first %))
-         (s/conformer next)
+         (s/conformer next #(cons sym %))
          spec))
 
 (def ^:private built-ins '#{and})
@@ -50,30 +50,26 @@
 (defn- aggregate? [x]
   (contains? (methods aggregate) x))
 
-(s/def ::triple (s/and vector? (s/cat :e (some-fn logic-var? c/valid-id? set?)
-                                      :a (s/and c/valid-id? some?)
-                                      :v (s/? (some-fn logic-var? literal?)))))
+(s/def ::triple (s/and vector?
+                       (s/conformer identity vec)
+                       (s/cat :e (some-fn logic-var? c/valid-id? set?)
+                              :a (s/and c/valid-id? some?)
+                              :v (s/? (some-fn logic-var? literal?)))))
 
 (s/def ::args-list (s/coll-of logic-var? :kind vector? :min-count 1))
 
-(s/def ::pred-fn (s/and symbol?
-                        (complement built-ins)
-                        (s/conformer #(or (if (pred-constraint? %)
-                                            %
-                                            (some->> (if (qualified-symbol? %)
-                                                       (requiring-resolve %)
-                                                       (ns-resolve 'clojure.core %))
-                                                     (var-get)))
-                                          %))
-                        (some-fn fn? logic-var?)))
 (s/def ::binding (s/or :scalar logic-var?
                        :tuple ::args-list
                        :collection (s/tuple logic-var? '#{...})
                        :relation (s/tuple ::args-list)))
-(s/def ::pred (s/and vector? (s/cat :pred (s/and seq?
-                                                 (s/cat :pred-fn ::pred-fn
-                                                        :args (s/* any?)))
-                                    :return (s/? ::binding))))
+
+(s/def ::pred-fn symbol?)
+(s/def ::pred (s/and vector?
+                     (s/conformer identity vec)
+                     (s/cat :pred (s/and seq?
+                                         (s/cat :pred-fn ::pred-fn
+                                                :args (s/* any?)))
+                            :return (s/? ::binding))))
 
 (s/def ::rule (s/and list? (s/cat :name (s/and symbol? (complement built-ins))
                                   :args (s/+ any?))))
@@ -101,7 +97,9 @@
 (s/def ::or-body (s/+ (s/or :term ::term
                             :and ::and)))
 (s/def ::or (expression-spec 'or ::or-body))
-(s/def ::or-join (expression-spec 'or-join (s/cat :args (s/and vector? ::rule-args)
+(s/def ::or-join (expression-spec 'or-join (s/cat :args (s/and vector?
+                                                               (s/conformer identity vec)
+                                                               ::rule-args)
                                                   :body ::or-body)))
 (s/def ::term (s/or :triple ::triple
                     :not ::not
@@ -112,7 +110,7 @@
                     :rule ::rule
                     :pred ::pred))
 
-(s/def ::aggregate (s/cat :aggregate-fn aggregate?
+(s/def ::aggregate (s/cat :aggregate-fn symbol?
                           :args (s/* literal?)
                           :logic-var logic-var?))
 
@@ -134,6 +132,7 @@
                           (s/cat :name (s/and symbol? (complement built-ins))
                                  :args ::rule-args)))
 (s/def ::rule-definition (s/and vector?
+                                (s/conformer identity vec)
                                 (s/cat :head ::rule-head
                                        :body (s/+ ::term))))
 (s/def ::rules (s/coll-of ::rule-definition :kind vector? :min-count 1))
@@ -392,6 +391,9 @@
           (disj acc (first acc))
           acc))))))
 
+(defmethod aggregate :default [aggregate-fn & args]
+  (throw (IllegalArgumentException. (str "Unknown aggregate function: " aggregate-fn))))
+
 (set! *unchecked-math* :warn-on-boxed)
 
 (defn- blank-var? [v]
@@ -443,11 +445,14 @@
            (case type
              :pred {:pred [(let [{:keys [pred return]} clause
                                  {:keys [pred-fn args]} pred
-                                 clause (if-let [range-pred (and (= 2 (count args))
-                                                                 (every? logic-var? args)
-                                                                 (get pred->built-in-range-pred pred-fn))]
-                                          (assoc-in clause [:pred :pred-fn] range-pred)
-                                          clause)]
+                                 actual-pred-fn (or (if (pred-constraint? pred-fn)
+                                                      pred-fn
+                                                      (some->> (if (qualified-symbol? pred-fn)
+                                                                 (requiring-resolve pred-fn)
+                                                                 (ns-resolve 'clojure.core pred-fn))
+                                                               (var-get)))
+                                                    pred-fn)
+                                 clause (update-in clause [:pred :pred-fn] with-meta {:actual-pred-fn actual-pred-fn})]
                              (if return
                                (assoc clause :return (w/postwalk #(if (blank-var? %)
                                                                     (gensym "_")
@@ -470,7 +475,7 @@
                                                             (= :val-sym order) (update :op range->inverse-range))]
                       (if (and (not= :sym-sym order)
                                (not (logic-var? sym)))
-                        {:pred [{:pred {:pred-fn (get pred->built-in-range-pred (var-get (resolve op)))
+                        {:pred [{:pred {:pred-fn (with-meta op {:actual-pred-fn (get pred->built-in-range-pred (var-get (resolve op)))})
                                         :args [sym val]}}]}
                         {:range [clause]}))
 
@@ -514,10 +519,11 @@
      :not-vars (->> (vals not-vars)
                     (reduce into not-join-vars))
      :pred-vars (set (for [{:keys [pred return]} pred-clauses
-                           :let [return-vars (find-binding-vars return)]
+                           :let [return-vars (find-binding-vars return)
+                                 {:keys [actual-pred-fn]} (meta (:pred-fn pred))]
                            var (concat return-vars
                                        (cond->> (:args pred)
-                                         (not (pred-constraint? (:pred-fn pred))) (cons (:pred-fn pred))))
+                                         (not (pred-constraint? actual-pred-fn)) (cons actual-pred-fn)))
                            :when (logic-var? var)]
                        var))
      :pred-return-vars (set (for [{:keys [pred return]} pred-clauses
@@ -993,6 +999,7 @@
 (defn- build-pred-constraints [rule-name->rules encode-value-fn pred-clause+idx-ids var->bindings vars-in-join-order]
   (for [[{:keys [pred return] :as clause} idx-id] pred-clause+idx-ids
         :let [{:keys [pred-fn args]} pred
+              pred-fn (:actual-pred-fn (meta pred-fn) pred-fn)
               pred-vars (filter logic-var? (cons pred-fn args))
               pred-join-depth (calculate-constraint-join-depth var->bindings pred-vars)
               arg-bindings (for [arg (cons pred-fn args)]
@@ -1239,13 +1246,14 @@
   (let [new-known-vars (->> pred-clauses
                             (reduce
                              (fn [acc {:keys [pred return]}]
-                               (if (->> (cond->> (:args pred)
-                                          (not (pred-constraint? (:pred-fn pred))) (cons (:pred-fn pred)))
-                                        (filter logic-var?)
-                                        (set)
-                                        (set/superset? acc))
-                                 (apply conj acc (find-binding-vars return))
-                                 acc))
+                               (let [{:keys [actual-pred-fn]} (meta (:pred-fn pred))]
+                                 (if (->> (cond->> (:args pred)
+                                            (not (pred-constraint? actual-pred-fn)) (cons actual-pred-fn))
+                                          (filter logic-var?)
+                                          (set)
+                                          (set/superset? acc))
+                                   (apply conj acc (find-binding-vars return))
+                                   acc)))
                              known-vars))]
     (if (= new-known-vars known-vars)
       new-known-vars
