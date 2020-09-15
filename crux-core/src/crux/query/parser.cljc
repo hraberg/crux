@@ -1,8 +1,7 @@
 (ns crux.query.parser
   (:require [clojure.spec.alpha :as s]
             [edn-query-language.core :as eql]
-            [clojure.string :as str]
-            [clojure.walk :as w]))
+            [clojure.string :as str]))
 
 (s/def ::query (s/and (s/conformer identity vec)
                       (s/cat :find-spec ::find-spec
