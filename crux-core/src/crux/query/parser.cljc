@@ -67,23 +67,24 @@
                            :clauses (s/+ ::clause)))
 
 (s/def ::not-join-clause (s/cat :src-var (s/? ::src-var)
-                                :not '#{not-join}
+                                :not-join '#{not-join}
                                 :args (s/coll-of ::variable :kind vector? :min-count 1)
                                 :clauses (s/+ ::clause)))
 
 (s/def ::or-clause (s/cat :src-var (s/? ::src-var)
-                          :not '#{or}
+                          :or '#{or}
                           :clauses (s/+ (s/or :clause ::clause
                                               :and-clause ::and-clause))))
 
 (s/def ::or-join-clause (s/cat :src-var (s/? ::src-var)
-                               :not '#{or-join}
+                               :or-join '#{or-join}
                                :args (s/tuple ::rule-vars)
                                :clauses (s/+ (s/or :clause ::clause
                                                    :and-clause ::and-clause))))
 
-(s/def ::rule-vars  (s/cat :bound-vars (s/? (s/coll-of ::variable :kind vector? :min-count 1))
-                           :free-vars (s/* ::variable)))
+(s/def ::rule-vars  (s/and (s/conformer identity vec)
+                           (s/cat :bound-vars (s/? (s/coll-of ::variable :kind vector? :min-count 1))
+                                  :free-vars (s/* ::variable))))
 
 (s/def ::clause (s/or :not-clause ::not-clause
                       :not-join-clause ::not-join-clause
