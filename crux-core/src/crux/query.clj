@@ -832,13 +832,6 @@
          [return-var (value-var-binding return-var result-index :pred)])
        (into {})))
 
-(defn- build-or-free-var-bindings [var->values-result-index or-clause+relation+or-branches]
-  (->> (for [[_ _ or-branches] or-clause+relation+or-branches
-             var (:free-vars (first or-branches))
-             :let [result-index (get var->values-result-index var)]]
-         [var (value-var-binding var result-index :or)])
-       (into {})))
-
 (defn- calculate-constraint-join-depth [var->bindings vars]
   (->> (for [var vars]
          (get-in var->bindings [var :result-index] -1))
