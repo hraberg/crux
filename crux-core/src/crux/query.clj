@@ -1045,11 +1045,12 @@
             {:pred
              {:pred-fn 'q
               :args (vec (cons (with-meta
-                                 {:find (if has-free-vars?
-                                          (vec free-vars)
-                                          [(first bound-vars)])
-                                  :in (vec (cons '$ bound-vars))
-                                  :where (s/unform ::where where)}
+                                 (cond-> {:find (if has-free-vars?
+                                                  (vec free-vars)
+                                                  [(first bound-vars)])
+                                          :in (vec (cons '$ bound-vars))
+                                          :where (s/unform ::where where)}
+                                   (not has-free-vars?) (assoc :limit 1))
                                  {:rule-name rule-name
                                   :branch-index branch-index})
                                bound-vars))}
