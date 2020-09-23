@@ -646,27 +646,6 @@
                var->joins))
            var->joins))]))
 
-(defn- in-joins [in var->joins]
-  (reduce
-   (fn [[acc var->joins] in]
-     (let [bind-vars (find-binding-vars in)
-           idx-id (gensym "in")
-        join {:id idx-id
-              :idx-fn
-              (fn [_ index-store _]
-                (idx/new-relation-virtual-index []
-                                                (count bind-vars)
-                                                (partial db/encode-value index-store)))}]
-       [(conj acc idx-id)
-        (->> bind-vars
-             (reduce
-              (fn [var->joins bind-var]
-                (->> {bind-var [join]}
-                     (merge-with into var->joins)))
-              var->joins))]))
-   [[] var->joins]
-   in))
-
 (defn- pred-joins [pred-clauses var->joins]
   (->> pred-clauses
        (reduce
@@ -796,6 +775,16 @@
    []
    not-clauses))
 
+(defn- in-pred-clauses [in-bindings]
+  (reduce
+   (fn [acc [n in-binding]]
+     (conj acc {:pred
+                {:pred-fn get-in
+                 :args ['$ [:in-args n]]}
+                :return in-binding}))
+   []
+   (map-indexed vector in-bindings)))
+
 (defrecord VarBinding [e-var var attr result-index result-name type value?])
 
 (defn- build-var-bindings [var->attr v-var->e e->v-var var->values-result-index max-join-depth vars]
@@ -818,12 +807,6 @@
     :result-index result-index
     :type type
     :value? true}))
-
-(defn- build-in-var-bindings [var->values-result-index in-vars]
-  (->> (for [var in-vars
-             :let [result-index (get var->values-result-index var)]]
-         [var (value-var-binding var result-index :in-var)])
-       (into {})))
 
 (defn- build-pred-return-var-bindings [var->values-result-index pred-clauses]
   (->> (for [{:keys [return]} pred-clauses
@@ -1002,7 +985,8 @@
                                :else
                                arg-binding))
           pred-result (apply pred-fn args)]
-      (bind-binding return-type tuple-idxs-in-join-order (get idx-id->idx idx-id) pred-result))))
+      (binding [nippy/*freeze-fallback* :write-unfreezable]
+        (bind-binding return-type tuple-idxs-in-join-order (get idx-id->idx idx-id) pred-result)))))
 
 (defn- build-tuple-idxs-in-join-order [bind-vars vars-in-join-order]
   (let [bind-vars->tuple-idx (zipmap bind-vars (range))]
@@ -1209,6 +1193,7 @@
         [or-preds known-vars] (or-pred-clauses :or or-clauses known-vars)
         [or-join-preds known-vars] (or-pred-clauses :or-join or-join-clauses known-vars)
         pred-clauses (concat pred-clauses
+                             (in-pred-clauses (:bindings in))
                              or-preds
                              or-join-preds
                              (not-pred-clauses :not not-clauses)
@@ -1219,7 +1204,6 @@
                                                     in-vars
                                                     range-vars
                                                     stats)
-        [in-idx-ids var->joins] (in-joins (:bindings in) var->joins)
         [pred-clause+idx-ids var->joins] (pred-joins pred-clauses var->joins)
         join-depth (count var->joins)
         vars-in-join-order (calculate-join-order pred-clauses var->joins triple-join-deps)
@@ -1234,7 +1218,6 @@
         e-var->attr (zipmap e-vars (repeat :crux.db/id))
         var->attr (merge e-var->attr v-var->attr)
         var->bindings (merge (build-pred-return-var-bindings var->values-result-index pred-clauses)
-                             (build-in-var-bindings var->values-result-index in-vars)
                              (build-var-bindings var->attr
                                                  v-var->e
                                                  e->v-var
@@ -1244,19 +1227,13 @@
         var->range-constraints (build-var-range-constraints encode-value-fn range-clauses var->bindings)
         var->logic-var-range-constraint-fns (build-logic-var-range-constraint-fns encode-value-fn range-clauses var->bindings)
         pred-constraints (build-pred-constraints rule-name->rules encode-value-fn pred-clause+idx-ids var->bindings vars-in-join-order)
-        depth->constraints (update-depth->constraints (vec (repeat join-depth nil)) pred-constraints)
-        in-bindings (vec (for [[idx-id [bind-type binding]] (map vector in-idx-ids (:bindings in))
-                               :let [bind-vars (find-binding-vars binding)]]
-                           {:idx-id idx-id
-                            :bind-type bind-type
-                            :tuple-idxs-in-join-order (build-tuple-idxs-in-join-order bind-vars vars-in-join-order)}))]
+        depth->constraints (update-depth->constraints (vec (repeat join-depth nil)) pred-constraints)]
     {:depth->constraints depth->constraints
      :var->range-constraints var->range-constraints
      :var->logic-var-range-constraint-fns var->logic-var-range-constraint-fns
      :vars-in-join-order vars-in-join-order
      :var->joins var->joins
      :var->bindings var->bindings
-     :in-bindings in-bindings
      :attr-stats (select-keys stats (vals var->attr))}))
 
 (defn- build-idx-id->idx [db index-snapshot {:keys [var->joins] :as compiled-query}]
@@ -1288,9 +1265,7 @@
                                                     logic-var+range-constraint)))))
     compiled-query))
 
-(defn- build-sub-query [index-snapshot {:keys [query-cache] :as db} where in in-args rule-name->rules stats]
-  ;; NOTE: this implies argument sets with different vars get compiled
-  ;; differently.
+(defn- build-sub-query [index-snapshot {:keys [query-cache] :as db} where in rule-name->rules stats]
   (let [encode-value-fn (partial db/encode-value index-snapshot)
         {:keys [depth->constraints
                 vars-in-join-order
@@ -1298,7 +1273,6 @@
                 var->logic-var-range-constraint-fns
                 var->joins
                 var->bindings
-                in-bindings
                 attr-stats]
          :as compiled-query} (-> (lru/compute-if-absent
                                   query-cache
@@ -1316,12 +1290,6 @@
                                  (idx/wrap-with-range-constraints (get var->range-constraints v))))
         constrain-result-fn (fn [join-keys]
                               (constrain-join-result-by-constraints index-snapshot db idx-id->idx depth->constraints join-keys))]
-    (binding [nippy/*freeze-fallback* :write-unfreezable]
-      (doseq [[{:keys [idx-id bind-type tuple-idxs-in-join-order]} in-arg] (map vector in-bindings in-args)]
-        (bind-binding bind-type
-                      tuple-idxs-in-join-order
-                      (get idx-id->idx idx-id)
-                      in-arg)))
     (log/debug :where (cio/pr-edn-str where))
     (log/debug :vars-in-join-order vars-in-join-order)
     (log/debug :attr-stats (cio/pr-edn-str attr-stats))
@@ -1579,11 +1547,11 @@
                                           (dissoc :args))))
     (validate-in in)
     (let [rule-name->rules (with-meta (rule-name->rules rules) {:rules (:rules q)})
-          db (assoc db :index-snapshot index-snapshot)
+          db (assoc db :index-snapshot index-snapshot :in-args in-args)
           entity-resolver-fn (or (:entity-resolver-fn db)
                                  (new-entity-resolver-fn db))
           db (assoc db :entity-resolver-fn entity-resolver-fn)
-          {:keys [n-ary-join var->bindings] :as built-query} (build-sub-query index-snapshot db where in in-args rule-name->rules stats)
+          {:keys [n-ary-join var->bindings] :as built-query} (build-sub-query index-snapshot db where in rule-name->rules stats)
           compiled-find (compile-find find (assoc built-query :full-results? full-results?) db)
           find-logic-vars (mapv :logic-var compiled-find)
           var-types (set (map :var-type compiled-find))
