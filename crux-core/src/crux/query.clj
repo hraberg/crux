@@ -919,7 +919,8 @@
             cache-key (when rule-name
                         [rule-name branch-index args])
             query (cond-> query
-                    (seq parent-rules) (update :rules (comp vec concat) parent-rules))]
+                    (seq parent-rules) (update :rules (comp vec concat) parent-rules)
+                    (nil? return-type) (assoc :limit 1))]
         (if-let [cached-result (when cache-key
                                  (get *recursion-table* cache-key))]
           cached-result
@@ -1014,7 +1015,8 @@
            {:pred-fn 'q
             :args (vec (cons {:find not-vars
                               :in (vec (cons '$ not-vars))
-                              :where (s/unform ::where not-clause)}
+                              :where (s/unform ::where not-clause)
+                              :limit 1}
                              not-vars))}
            :return [:scalar not-return]}
           {:pred {:pred-fn empty? :args [not-return]}}])
