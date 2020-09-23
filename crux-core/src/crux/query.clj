@@ -696,19 +696,43 @@
 (defn- clause-complexity [clause]
   (count (cio/pr-edn-str clause)))
 
-(defn- single-e-var-triple? [vars where]
-  (and (= 1 (count where))
-       (let [[[type {:keys [e v]}]] where]
-         (and (= :triple type)
-              (contains? vars e)
-              (logic-var? e)
-              (literal? v)
-              (not (c/multiple-values? v))))))
+(defn- build-or-pred-clause [clause [{:keys [free-vars bound-vars]} :as or-branches]]
+  (let [has-free-vars? (boolean (seq free-vars))
+        bound-vars (vec bound-vars)
+        or-return (gensym 'or-return)
+        or-branches (for [[n or-branch] (map-indexed vector or-branches)]
+                      (assoc or-branch
+                             :branch-index n
+                             :branch-return (symbol (str or-return "_" n))))
+        or-branch-returns (mapv :branch-return or-branches)
+        {:keys [rule-name]} (meta clause)]
+    (cons
+     (if has-free-vars?
+       {:pred {:pred-fn set/union
+               :args or-branch-returns}
+        :return [:relation [(vec free-vars)]]}
+       {:pred {:pred-fn (fn [& args]
+                          (boolean (some not-empty args)))
+               :args or-branch-returns}})
+     (for [{:keys [where branch-return branch-index] :as or-branch} or-branches]
+       {:pred
+        {:pred-fn 'q
+         :args (vec (cons (with-meta
+                            (cond-> {:find (if has-free-vars?
+                                             (vec free-vars)
+                                             [(first bound-vars)])
+                                     :in (vec (cons '$ bound-vars))
+                                     :where (s/unform ::where where)}
+                              (not has-free-vars?) (assoc :limit 1))
+                            {:rule-name rule-name
+                             :branch-index branch-index})
+                          bound-vars))}
+        :return [:scalar branch-return]}))))
 
-(defn- or-joins [or-type or-clauses known-vars]
+(defn- or-pred-clauses [or-type or-clauses known-vars]
   (->> (sort-by clause-complexity or-clauses)
        (reduce
-        (fn [[or-clause+or-branches known-vars] clause]
+        (fn [[acc known-vars] clause]
           (let [or-join? (= :or-join or-type)
                 or-branches (for [[type sub-clauses] (case or-type
                                                        :or clause
@@ -741,15 +765,36 @@
                                   {:or-vars or-vars
                                    :free-vars free-vars
                                    :bound-vars bound-vars
-                                   :where where
-                                   :single-e-var-triple? (single-e-var-triple? bound-vars where)}))
+                                   :where where}))
                 free-vars (:free-vars (first or-branches))]
             (when (not (apply = (map :or-vars or-branches)))
               (throw (IllegalArgumentException.
                       (str "Or requires same logic variables: " (cio/pr-edn-str clause)))))
-            [(conj or-clause+or-branches [clause or-branches])
+            [(into acc (build-or-pred-clause clause or-branches))
              (into known-vars free-vars)]))
         [[] known-vars])))
+
+(defn- not-pred-clauses [not-type not-clauses]
+  (reduce
+   (fn [acc not-clause]
+     (let [[not-vars not-clause] (case not-type
+                                   :not [(:not-vars (collect-vars (normalize-clauses [[:not not-clause]])))
+                                         not-clause]
+                                   :not-join [(:args not-clause)
+                                              (:body not-clause)])
+           not-vars (vec (remove blank-var? not-vars))
+           not-return (gensym 'not-return)]
+       (into acc [{:pred
+                   {:pred-fn 'q
+                    :args (vec (cons {:find not-vars
+                                      :in (vec (cons '$ not-vars))
+                                      :where (s/unform ::where not-clause)
+                                      :limit 1}
+                                     not-vars))}
+                   :return [:scalar not-return]}
+                  {:pred {:pred-fn empty? :args [not-return]}}])))
+   []
+   not-clauses))
 
 (defrecord VarBinding [e-var var attr result-index result-name type value?])
 
@@ -1002,61 +1047,6 @@
         {:join-depth pred-join-depth
          :constraint-fn (pred-constraint clause pred-ctx)})))
 
-(defn- not-pred-clauses [not-type not-clauses]
-  (->> (for [not-clause not-clauses
-             :let [[not-vars not-clause] (case not-type
-                                           :not [(:not-vars (collect-vars (normalize-clauses [[:not not-clause]])))
-                                                 not-clause]
-                                           :not-join [(:args not-clause)
-                                                      (:body not-clause)])
-                   not-vars (vec (remove blank-var? not-vars))
-                   not-return (gensym 'not-return)]]
-         [{:pred
-           {:pred-fn 'q
-            :args (vec (cons {:find not-vars
-                              :in (vec (cons '$ not-vars))
-                              :where (s/unform ::where not-clause)
-                              :limit 1}
-                             not-vars))}
-           :return [:scalar not-return]}
-          {:pred {:pred-fn empty? :args [not-return]}}])
-       (reduce into [])))
-
-(defn- or-pred-clauses [or-clause+or-branches]
-  (->> (for [[clause [{:keys [free-vars bound-vars]} :as or-branches]] or-clause+or-branches
-             :let [has-free-vars? (boolean (seq free-vars))
-                   bound-vars (vec bound-vars)
-                   or-return (gensym 'or-return)
-                   or-branches (for [[n or-branch] (map-indexed vector or-branches)]
-                                 (assoc or-branch
-                                        :branch-index n
-                                        :branch-return (symbol (str or-return "_" n))))
-                   or-branch-returns (mapv :branch-return or-branches)
-                   {:keys [rule-name]} (meta clause)]]
-         (cons
-          (if has-free-vars?
-            {:pred {:pred-fn set/union
-                    :args or-branch-returns}
-             :return [:relation [(vec free-vars)]]}
-            {:pred {:pred-fn (fn [& args]
-                               (boolean (some not-empty args)))
-                    :args or-branch-returns}})
-          (for [{:keys [where branch-return branch-index] :as or-branch} or-branches]
-            {:pred
-             {:pred-fn 'q
-              :args (vec (cons (with-meta
-                                 (cond-> {:find (if has-free-vars?
-                                                  (vec free-vars)
-                                                  [(first bound-vars)])
-                                          :in (vec (cons '$ bound-vars))
-                                          :where (s/unform ::where where)}
-                                   (not has-free-vars?) (assoc :limit 1))
-                                 {:rule-name rule-name
-                                  :branch-index branch-index})
-                               bound-vars))}
-             :return [:scalar branch-return]})))
-       (reduce into [])))
-
 (defn- constrain-join-result-by-constraints [index-snapshot db idx-id->idx depth->constraints join-keys]
   (->> (get depth->constraints (count join-keys))
        (every? (fn [f]
@@ -1221,6 +1211,15 @@
         {:keys [e-vars
                 v-vars
                 range-vars]} (collect-vars type->clauses)
+        known-vars (set/union e-vars v-vars in-vars)
+        known-vars (add-pred-returns-bound-at-top-level known-vars pred-clauses)
+        [or-preds known-vars] (or-pred-clauses :or or-clauses known-vars)
+        [or-join-preds known-vars] (or-pred-clauses :or-join or-join-clauses known-vars)
+        pred-clauses (concat pred-clauses
+                             or-preds
+                             or-join-preds
+                             (not-pred-clauses :not not-clauses)
+                             (not-pred-clauses :not-join not-join-clauses))
         var->joins {}
         [triple-join-deps var->joins] (triple-joins triple-clauses
                                                     var->joins
@@ -1228,15 +1227,6 @@
                                                     range-vars
                                                     stats)
         [in-idx-ids var->joins] (in-joins (:bindings in) var->joins)
-        known-vars (set/union e-vars v-vars in-vars)
-        known-vars (add-pred-returns-bound-at-top-level known-vars pred-clauses)
-        [or-clause+or-branches known-vars] (or-joins :or or-clauses known-vars)
-        [or-join-clause+or-branches known-vars] (or-joins :or-join or-join-clauses known-vars)
-        or-clause+or-branches (concat or-clause+or-branches or-join-clause+or-branches)
-        pred-clauses (concat pred-clauses
-                             (or-pred-clauses or-clause+or-branches)
-                             (not-pred-clauses :not not-clauses)
-                             (not-pred-clauses :not-join not-join-clauses))
         [pred-clause+idx-ids var->joins] (pred-joins pred-clauses var->joins)
         join-depth (count var->joins)
         vars-in-join-order (calculate-join-order pred-clauses var->joins triple-join-deps)
