@@ -316,7 +316,7 @@
                    [(< l_commitdate l_receiptdate)]
                    [(< l_shipdate l_commitdate)]
                    [l :l_shipmode l_shipmode]
-                   [l :l_shipmode #{"MAIL" "SHIP"}]
+                   [(contains? #{"MAIL" "SHIP"} l_shipmode)]
                    [o :o_orderpriority o_orderpriority]
                    [(get {"1-URGENT" [1 0]
                           "2-HIGH" [1 0]} o_orderpriority [0 1])
@@ -388,7 +388,7 @@
                    [p :p_type p_type]
                    (not [(re-find #"^MEDIUM POLISHED.*" p_type)])
                    [p :p_size p_size]
-                   [p :p_size #{49 14 23 45 19 3 36 9}]
+                   [(contains? {49 14 23 45 19 3 36 9} p_size)]
                    [ps :ps_partkey p]
                    [ps :ps_suppkey s]
                    (not-join [s]
@@ -437,7 +437,8 @@
 
 ;; "Elapsed time: 4693.23977 msecs"
 (def q19 '{:find [(sum ret_2)]
-           :where [[l :l_shipmode #{"AIR" "AIR REG"}]
+           :where [[l :l_shipmode l_shipmode]
+                   [(contains? #{"AIR" "AIR REG"} l_shipmode)]
                    [l :l_shipinstruct "DELIVER IN PERSON"]
                    [l :l_discount l_discount]
                    [l :l_extendedprice l_extendedprice]
@@ -445,19 +446,22 @@
                    [l :l_quantity l_quantity]
                    [p :p_size p_size]
                    (or (and [p :p_brand "Brand#12"]
-                            [p :p_container #{"SM CASE" "SM BOX" "SM PACK" "SM PKG"}]
+                            [p :p_container p_container]
+                            [(contains? #{"SM CASE" "SM BOX" "SM PACK" "SM PKG"} p_container)]
                             [(>= l_quantity 1.0)]
                             [(<= l_quantity 11.0)]
                             [(>= p_size 1)]
                             [(<= p_size 5)])
                        (and [p :p_brand "Brand#23"]
-                            [p :p_container #{"MED BAG" "MED BOX" "MED PKG" "MED PACK"}]
+                            [p :p_container p_container]
+                            [(contains? #{"MED BAG" "MED BOX" "MED PKG" "MED PACK"} p_container)]
                             [(>= l_quantity 10.0)]
                             [(<= l_quantity 20.0)]
                             [(>= p_size 1)]
                             [(<= p_size 10)])
                        (and [p :p_brand "Brand#34"]
-                            [p :p_container #{"LG CASE" "LG BOX" "LG PACK" "LG PKG"}]
+                            [p :p_container p_container]
+                            [(contains? #{"LG CASE" "LG BOX" "LG PACK" "LG PKG"} p_container)]
                             [(>= l_quantity 20.0)]
                             [(<= l_quantity 30.0)]
                             [(>= p_size 1)]
