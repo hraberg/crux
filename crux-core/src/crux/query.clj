@@ -587,7 +587,7 @@
         join-order (filter logic-var? join-order)]
     (log/debug :triple-joins-var->frequency var->frequency)
     (log/debug :triple-joins-join-order join-order)
-    join-order))
+    (distinct join-order)))
 
 (defn- pred-joins [pred-clauses]
   (->> pred-clauses
@@ -657,7 +657,7 @@
                                   :args ['$]}
                            :return [:collection [e '...]]}))
         triple-clauses (set (remove (set literal-clauses) triple-clauses))
-        known-vars (set/union literal-vars (set in-vars))]
+        known-vars (set in-vars)]
     (first
      (reduce
       (fn [[acc known-vars clauses] var]
@@ -1237,15 +1237,6 @@
         join-depth (count var->joins)
         vars-in-join-order (calculate-join-order pred-clauses)
         var->values-result-index (zipmap vars-in-join-order (range))
-        v-var->e (build-v-var->e triple-clauses var->values-result-index)
-        e->v-var (set/map-invert v-var->e)
-        v-var->attr (->> (for [{:keys [e a v]} triple-clauses
-                               :when (and (logic-var? v)
-                                          (= e (get v-var->e v)))]
-                           [v a])
-                         (into {}))
-        e-var->attr (zipmap e-vars (repeat :crux.db/id))
-        var->attr (merge e-var->attr v-var->attr)
         var->bindings (build-pred-return-var-bindings var->values-result-index pred-clauses)
         var->range-constraints (build-var-range-constraints encode-value-fn range-clauses var->bindings)
         var->logic-var-range-constraint-fns (build-logic-var-range-constraint-fns encode-value-fn range-clauses var->bindings)
@@ -1256,8 +1247,7 @@
      :var->logic-var-range-constraint-fns var->logic-var-range-constraint-fns
      :vars-in-join-order vars-in-join-order
      :var->joins var->joins
-     :var->bindings var->bindings
-     :attr-stats (select-keys stats (vals var->attr))}))
+     :var->bindings var->bindings}))
 
 (defn- build-idx-id->idx [db index-snapshot {:keys [var->joins] :as compiled-query}]
   (->> (for [[_ joins] var->joins
@@ -1295,8 +1285,7 @@
                 var->range-constraints
                 var->logic-var-range-constraint-fns
                 var->joins
-                var->bindings
-                attr-stats]
+                var->bindings]
          :as compiled-query} (-> (lru/compute-if-absent
                                   query-cache
                                   [where in rule-name->rules]
@@ -1315,7 +1304,7 @@
                               (constrain-join-result-by-constraints index-snapshot db idx-id->idx depth->constraints join-keys))]
     (log/debug :where (cio/pr-edn-str where))
     (log/debug :vars-in-join-order vars-in-join-order)
-    (log/debug :attr-stats (cio/pr-edn-str attr-stats))
+    (log/debug :attr-stats (cio/pr-edn-str stats))
     (log/debug :var->bindings (cio/pr-edn-str var->bindings))
     {:n-ary-join (when (constrain-result-fn [])
                    (-> (idx/new-n-ary-join-layered-virtual-index unary-join-indexes)
