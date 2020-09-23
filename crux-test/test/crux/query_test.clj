@@ -1105,53 +1105,54 @@
                                      :where [[e :name "Ivan"]
                                              [(get-attr e :email nil) [email ...]]]})))))
 
-(t/deftest test-multiple-values-literals
-  (fix/transact! *api* (fix/people [{:crux.db/id :ivan :name "Ivan" :age 21 :friends #{:petr :oleg}}
-                                    {:crux.db/id :petr :name "Petr" :age 30 :friends #{:ivan}}]))
-  (t/testing "set"
-    (t/is (empty? (api/q (api/db *api*) '{:find [e]
-                                          :where [[e :name #{}]]})))
+;; NOTE: removing support for this for now.
+#_(t/deftest test-multiple-values-literals
+    (fix/transact! *api* (fix/people [{:crux.db/id :ivan :name "Ivan" :age 21 :friends #{:petr :oleg}}
+                                      {:crux.db/id :petr :name "Petr" :age 30 :friends #{:ivan}}]))
+    (t/testing "set"
+      (t/is (empty? (api/q (api/db *api*) '{:find [e]
+                                            :where [[e :name #{}]]})))
 
-    (t/is (empty? (api/q (api/db *api*) '{:find [e]
-                                          :where [[e :name #{"Oleg"}]]})))
+      (t/is (empty? (api/q (api/db *api*) '{:find [e]
+                                            :where [[e :name #{"Oleg"}]]})))
 
-    (t/is (= #{[:ivan]}
+      (t/is (= #{[:ivan]}
+               (api/q (api/db *api*) '{:find [e]
+                                       :where [[e :name #{"Ivan" "Oleg"}]]})))
+
+      (t/is (= #{[:ivan] [:petr]}
+               (api/q (api/db *api*) '{:find [e]
+                                       :where [[e :name #{"Ivan" "Petr"}]]})))
+
+      (t/is (= #{[:ivan]}
+               (api/q (api/db *api*) '{:find [e]
+                                       :where [[e :friends #{:petr :oleg}]]})))
+
+      (t/is (= #{[:ivan] [:petr]}
+               (api/q (api/db *api*) '{:find [e]
+                                       :where [[e :friends #{:petr :ivan}]]}))))
+
+    (t/testing "entity position"
+      (t/is (empty? (api/q (api/db *api*) '{:find [name]
+                                            :where [[#{} :name name]]})))
+
+      (t/is (empty? (api/q (api/db *api*) '{:find [name]
+                                            :where [[#{:oleg} :name name]]})))
+
+      (t/is (= #{["Ivan"]}
+               (api/q (api/db *api*) '{:find [name]
+                                       :where [[#{:ivan :oleg} :name name]]})))
+
+      (t/is (= #{["Ivan"] ["Petr"]}
+               (api/q (api/db *api*) '{:find [name]
+                                       :where [[#{:ivan :petr} :name name]]}))))
+
+    (t/testing "vectors are not supported"
+      (t/is (thrown-with-msg?
+             RuntimeException
+             #"Spec assertion failed"
              (api/q (api/db *api*) '{:find [e]
-                                     :where [[e :name #{"Ivan" "Oleg"}]]})))
-
-    (t/is (= #{[:ivan] [:petr]}
-             (api/q (api/db *api*) '{:find [e]
-                                     :where [[e :name #{"Ivan" "Petr"}]]})))
-
-    (t/is (= #{[:ivan]}
-             (api/q (api/db *api*) '{:find [e]
-                                     :where [[e :friends #{:petr :oleg}]]})))
-
-    (t/is (= #{[:ivan] [:petr]}
-             (api/q (api/db *api*) '{:find [e]
-                                     :where [[e :friends #{:petr :ivan}]]}))))
-
-  (t/testing "entity position"
-    (t/is (empty? (api/q (api/db *api*) '{:find [name]
-                                          :where [[#{} :name name]]})))
-
-    (t/is (empty? (api/q (api/db *api*) '{:find [name]
-                                          :where [[#{:oleg} :name name]]})))
-
-    (t/is (= #{["Ivan"]}
-             (api/q (api/db *api*) '{:find [name]
-                                     :where [[#{:ivan :oleg} :name name]]})))
-
-    (t/is (= #{["Ivan"] ["Petr"]}
-             (api/q (api/db *api*) '{:find [name]
-                                     :where [[#{:ivan :petr} :name name]]}))))
-
-  (t/testing "vectors are not supported"
-    (t/is (thrown-with-msg?
-           RuntimeException
-           #"Spec assertion failed"
-           (api/q (api/db *api*) '{:find [e]
-                                   :where [[e :name [:ivan]]]})))))
+                                     :where [[e :name [:ivan]]]})))))
 
 (t/deftest test-collection-returns
   (t/testing "vectors"
@@ -1162,9 +1163,9 @@
                       :where [[(vector 1 2) [x ...]]]})))
 
     (t/is (= #{}
-           (api/q (api/db *api*)
-                  '{:find [x]
-                    :where [[(vector) [x ...]]]}))))
+             (api/q (api/db *api*)
+                    '{:find [x]
+                      :where [[(vector) [x ...]]]}))))
 
   (t/testing "sets"
     (t/is (= #{[1]
@@ -1214,8 +1215,8 @@
            (api/q (api/db *api*) '{:find [x y]
                                    :where [[(identity #{[1 2] [3 4]}) [[x y]]]]})))
 
-   (t/is (empty? (api/q (api/db *api*) '{:find [x y]
-                                         :where [[(identity #{}) [[x y]]]]})))
+  (t/is (empty? (api/q (api/db *api*) '{:find [x y]
+                                        :where [[(identity #{}) [[x y]]]]})))
 
   (t/testing "distinct tuples"
     (t/is (= #{[1 2]}
@@ -2768,8 +2769,8 @@
 
     (t/testing "variance aggregate"
       (t/is (= (ffirst (api/q db '[:find (variance ?x)
-                                    :where [(identity [10 15 20 35 75]) [?x ...]]]))
-                554.0))) ;; double
+                                   :where [(identity [10 15 20 35 75]) [?x ...]]]))
+               554.0))) ;; double
 
     (t/testing "stddev aggregate"
       (t/is (= (ffirst (api/q db '[:find (stddev ?x)
@@ -2783,7 +2784,7 @@
 
     (t/testing "sample aggregate"
       (t/is (= (count (ffirst (api/q db '[:find (sample 7 ?x)
-                                   :where [(identity [:a :b :c :a :d]) [?x ...]]])))
+                                          :where [(identity [:a :b :c :a :d]) [?x ...]]])))
                4)))
 
     (t/testing "rand aggregate"
@@ -3359,9 +3360,9 @@
 (t/deftest test-nil-query-attribute-453
   (fix/transact! *api* [{:crux.db/id :id :this :that :these :those}])
   (t/is (thrown-with-msg?
-          RuntimeException
-          #"Spec assertion failed"
-          (= #{[:id]} (api/q (api/db *api*) {:find ['e] :where [['_ nil 'e]]})))))
+         RuntimeException
+         #"Spec assertion failed"
+         (= #{[:id]} (api/q (api/db *api*) {:find ['e] :where [['_ nil 'e]]})))))
 
 ;; TODO: Unsure why this test has started failing, or how much it
 ;; matters?
@@ -3441,8 +3442,7 @@
 (t/deftest test-binds-args-before-entities
   (t/is (= ['m 'e]
            (->> (q/query-plan-for {:find '[e]
-                                   :where '[[e :foo/type "type"]
-                                            [e :foo/id m]]
+                                   :where '[[e :foo/id m]]
                                    :args [{'m 1}]}
                                   c/->value-buffer
                                   {})

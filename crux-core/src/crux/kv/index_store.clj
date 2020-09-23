@@ -487,7 +487,9 @@
 
   (ave [this a v min-e entity-resolver-fn]
     (let [attr-buffer (c/->id-buffer a)
-          value-buffer (buffer-or-value-buffer v)
+          value-buffer (buffer-or-value-buffer (if (nil? v)
+                                                 (db/encode-value this v)
+                                                 v))
           prefix (encode-ave-key-to nil attr-buffer value-buffer)
           i (new-prefix-kv-iterator @level-2-iterator-delay prefix)]
       (some->> (encode-ave-key-to (.get seek-buffer-tl)
@@ -530,7 +532,9 @@
 
   (aev [this a e min-v entity-resolver-fn]
     (let [attr-buffer (c/->id-buffer a)
-          eid-value-buffer (buffer-or-value-buffer e)
+          eid-value-buffer (buffer-or-value-buffer (if (nil? e)
+                                                     (db/encode-value this e)
+                                                     e))
           eid-buffer (value-buffer->id-buffer this eid-value-buffer)]
       (when-let [content-hash-buffer (entity-resolver-fn eid-buffer)]
         (let [prefix (encode-ecav-key-to nil eid-value-buffer content-hash-buffer attr-buffer)

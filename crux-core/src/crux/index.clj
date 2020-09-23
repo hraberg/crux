@@ -357,25 +357,32 @@
   ([^RelationVirtualIndex relation tuples]
    (update-relation-virtual-index! relation tuples (.encode_value_fn relation) false))
   ([^RelationVirtualIndex relation tuples encode-value-fn single-values?]
-   (let [tree (if single-values?
-                (reduce
-                 (fn [^TreeMap acc v]
-                   (doto acc
-                     (.put (encode-value-fn v) nil)))
-                 (TreeMap. mem/buffer-comparator)
-                 tuples)
-                (reduce
-                 (fn [acc tuple]
-                   (tree-map-put-in acc (mapv encode-value-fn tuple) nil))
-                 (TreeMap. mem/buffer-comparator)
-                 tuples))
-         root-level (new-sorted-virtual-index tree)
-         state ^RelationVirtualIndexState (.state relation)]
-     (set! (.tree state) tree)
-     (set! (.path state) [])
-     (set! (.indexes state) [root-level])
-     (set! (.key state) nil)
-     relation)))
+   (if (and (satisfies? db/Index tuples) single-values?)
+     (let [state ^RelationVirtualIndexState (.state relation)]
+       (set! (.tree state) nil)
+       (set! (.path state) [])
+       (set! (.indexes state) [tuples])
+       (set! (.key state) nil)
+       relation)
+     (let [tree (if single-values?
+                  (reduce
+                   (fn [^TreeMap acc v]
+                     (doto acc
+                       (.put (encode-value-fn v) nil)))
+                   (TreeMap. mem/buffer-comparator)
+                   tuples)
+                  (reduce
+                   (fn [acc tuple]
+                     (tree-map-put-in acc (mapv encode-value-fn tuple) nil))
+                   (TreeMap. mem/buffer-comparator)
+                   tuples))
+           root-level (new-sorted-virtual-index tree)
+           state ^RelationVirtualIndexState (.state relation)]
+       (set! (.tree state) tree)
+       (set! (.path state) [])
+       (set! (.indexes state) [root-level])
+       (set! (.key state) nil)
+       relation))))
 
 (defn new-relation-virtual-index [tuples max-depth encode-value-fn]
   (update-relation-virtual-index! (->RelationVirtualIndex max-depth
