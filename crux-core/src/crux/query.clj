@@ -622,7 +622,7 @@
      var-triple-clauses]))
 
 (defn- build-literal-triple-pred-clause [{:keys [e a v] :as clause}]
-  (let [snapshot-id (gensym 'snapshot-id)]
+  (let [snapshot-id (gensym "snapshot-id")]
     (cond
       (and (literal? e) (literal? v))
       {:pred {:pred-fn (fn literal-ev-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
@@ -635,7 +635,7 @@
               :args ['$]}}
 
       (literal? e)
-      {:pred {:pred-fn (let [id (gensym 'snapshot-id)]
+      {:pred {:pred-fn (let [id (gensym "snapshot-id")]
                          (fn literal-e-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
                            (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
                              (idx/new-index-store-index
@@ -654,7 +654,7 @@
        :return [:collection [e '...]]})))
 
 (defn build-var-triple-pred-clause [{:keys [e a v] :as clause} known-vars var]
-  (let [snapshot-id (gensym 'snapshot-id)]
+  (let [snapshot-id (gensym "snapshot-id")]
    (cond
      (= e var)
      (if (contains? known-vars v)
@@ -718,7 +718,7 @@
 (defn- build-or-pred-clause [clause [{:keys [free-vars bound-vars]} :as or-branches]]
   (let [has-free-vars? (boolean (seq free-vars))
         bound-vars (vec bound-vars)
-        or-return (gensym 'or-return)
+        or-return (gensym "or-return_")
         or-branches (for [[n or-branch] (map-indexed vector or-branches)]
                       (assoc or-branch
                              :branch-index n
@@ -806,7 +806,7 @@
                                    :not-join [(:args not-clause)
                                               (:body not-clause)])
            not-vars (vec (remove blank-var? not-vars))
-           not-return (gensym 'not-return)]
+           not-return (gensym "not-return_")]
        (into acc [{:pred
                    {:pred-fn 'q
                     :args (vec (cons {:find not-vars
@@ -1177,7 +1177,7 @@
                    (str "Return variables not distinct: " (cio/pr-edn-str clause))))
            (case return-type
              :scalar
-             (let [scalar-var (gensym (str "scalar_" return-binding))]
+             (let [scalar-var (gensym (str "scalar_" return-binding "_"))]
                [{:pred pred
                  :return [:scalar scalar-var]}
                 {:pred {:pred-fn (fn scalar->collection [{:keys [index-snapshot] :as db} scalar]
@@ -1187,7 +1187,7 @@
                  :return [:collection [return-binding '...]]}])
 
              :tuple
-             (let [tuple-var (gensym (str "tuple_" (string/join "_" return-binding)))]
+             (let [tuple-var (gensym (str "tuple_" (string/join "_" return-binding) "_"))]
                (cons {:pred pred
                       :return [:scalar tuple-var]}
                      (for [[idx var] (map-indexed vector return-binding)]
@@ -1200,8 +1200,8 @@
 
              :relation
              (let [return-binding (first return-binding)
-                   relation-var (gensym (str "relation_" (string/join "_" return-binding)))
-                   reordered-relation-var (gensym (str "reordered-relation_" (string/join "_" return-binding)))
+                   relation-var (gensym (str "relation_" (string/join "_" return-binding) "_"))
+                   reordered-relation-var (gensym (str "reordered-relation_" (string/join "_" return-binding) "_"))
                    tuple-vars-in-join-order (keep (set return-binding) join-order)
                    tuple-idxs-in-join-order (mapv (zipmap return-binding (range))
                                                   tuple-vars-in-join-order)]
