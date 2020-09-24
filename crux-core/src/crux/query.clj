@@ -634,11 +634,12 @@
                                 var [e v]
                                 :when (logic-var? var)]
                             var))
-        literal-preds (for [{:keys [e a v] :as clause} literal-clauses]
+        literal-preds (for [{:keys [e a v] :as clause} literal-clauses
+                            :let [snapshot-id (gensym 'snapshot-id)]]
                         (cond
                           (and (literal? e) (literal? v))
-                          {:pred {:pred-fn (fn literal-ev-triple [{:keys [entity-resolver-fn index-snapshot] :as db}]
-                                             (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
+                          {:pred {:pred-fn (fn literal-ev-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
+                                             (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
                                                (some->> (db/aev nested-index-snapshot a e v entity-resolver-fn)
                                                         (not-empty)
                                                         (first)
@@ -647,17 +648,18 @@
                                   :args ['$]}}
 
                           (literal? e)
-                          {:pred {:pred-fn (fn literal-e-triple [{:keys [entity-resolver-fn index-snapshot] :as db}]
-                                             (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
-                                               (idx/new-index-store-index
-                                                (fn [v]
-                                                  (db/aev nested-index-snapshot a e v entity-resolver-fn)))))
+                          {:pred {:pred-fn (let [id (gensym 'snapshot-id)]
+                                             (fn literal-e-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
+                                               (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
+                                                 (idx/new-index-store-index
+                                                  (fn [v]
+                                                    (db/aev nested-index-snapshot a e v entity-resolver-fn))))))
                                   :args ['$]}
                            :return [:collection [v '...]]}
 
                           (literal? v)
-                          {:pred {:pred-fn (fn literal-v-triple [{:keys [entity-resolver-fn index-snapshot] :as db}]
-                                             (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
+                          {:pred {:pred-fn (fn literal-v-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
+                                             (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
                                                (idx/new-index-store-index
                                                 (fn [e]
                                                   (db/ave nested-index-snapshot a v e entity-resolver-fn)))))
@@ -668,19 +670,20 @@
      (reduce
       (fn [[acc known-vars clauses] var]
         (let [triple-preds (for [{:keys [e a v] :as clause} clauses
-                                 :when (or (= e var) (= v var))]
+                                 :when (or (= e var) (= v var))
+                                 :let [snapshot-id (gensym 'snapshot-id)]]
                              (cond
                                (= e var)
                                (if (contains? known-vars v)
-                                 {:pred {:pred-fn (fn ave-triple [{:keys [entity-resolver-fn index-snapshot] :as db} v]
-                                                    (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
+                                 {:pred {:pred-fn (fn ave-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} v]
+                                                    (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
                                                       (idx/new-index-store-index
                                                        (fn [e]
                                                          (db/ave nested-index-snapshot a v e entity-resolver-fn)))))
                                          :args ['$ v]}
                                   :return [:collection [e '...]]}
-                                 {:pred {:pred-fn (fn ae-triple [{:keys [entity-resolver-fn index-snapshot] :as db}]
-                                                    (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
+                                 {:pred {:pred-fn (fn ae-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
+                                                    (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
                                                       (idx/new-index-store-index
                                                        (fn [e]
                                                          (db/ae nested-index-snapshot a e entity-resolver-fn)))))
@@ -689,15 +692,15 @@
 
                                (= v var)
                                (if (contains? known-vars e)
-                                 {:pred {:pred-fn (fn aev-triple [{:keys [entity-resolver-fn index-snapshot] :as db} e]
-                                                    (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
+                                 {:pred {:pred-fn (fn aev-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} e]
+                                                    (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
                                                       (idx/new-index-store-index
                                                        (fn [v]
                                                          (db/aev nested-index-snapshot a e v entity-resolver-fn)))))
                                          :args ['$ e]}
                                   :return [:collection [v '...]]}
-                                 {:pred {:pred-fn (fn av-triple [{:keys [entity-resolver-fn index-snapshot] :as db}]
-                                                    (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
+                                 {:pred {:pred-fn (fn av-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
+                                                    (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
                                                       (idx/new-index-store-index
                                                        (fn [v]
                                                          (db/av nested-index-snapshot a v entity-resolver-fn)))))
@@ -1583,7 +1586,10 @@
           db (assoc db :index-snapshot index-snapshot :in-args in-args)
           entity-resolver-fn (or (:entity-resolver-fn db)
                                  (new-entity-resolver-fn db))
-          db (assoc db :entity-resolver-fn entity-resolver-fn)
+          open-nested-index-snapshot-fn (memoize
+                                         (fn [id]
+                                           (db/open-nested-index-snapshot index-snapshot)))
+          db (assoc db :entity-resolver-fn entity-resolver-fn :open-nested-index-snapshot-fn open-nested-index-snapshot-fn)
           {:keys [n-ary-join var->bindings] :as built-query} (build-sub-query index-snapshot db where in rule-name->rules stats)
           compiled-find (compile-find find (assoc built-query :full-results? full-results?) db)
           find-logic-vars (mapv :logic-var compiled-find)
