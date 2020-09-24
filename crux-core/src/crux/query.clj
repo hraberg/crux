@@ -59,18 +59,19 @@
 (s/def ::args-list (s/coll-of logic-var? :kind vector? :min-count 1))
 
 (s/def ::pred-fn (s/and symbol?
-                        (s/conformer #(or (if (pred-constraint? %)
-                                            %
-                                            (some->
-                                             (some->> (if (qualified-symbol? %)
-                                                        (requiring-resolve %)
-                                                        (ns-resolve 'clojure.core %))
-                                                      (var-get))
-                                             (with-meta {:sym %})))
-                                          %)
-                                     #(if (symbol? %)
-                                        %
-                                        (:sym (meta %))))
+                        (s/conformer
+                         #(or (if (pred-constraint? %)
+                                %
+                                (some->
+                                 (some->> (if (qualified-symbol? %)
+                                            (requiring-resolve %)
+                                            (ns-resolve 'clojure.core %))
+                                          (var-get))
+                                 (with-meta {:sym %})))
+                              %)
+                         #(if (symbol? %)
+                            %
+                            (get (meta %) :sym %)))
                         (some-fn fn? logic-var?)))
 (s/def ::binding (s/or :scalar logic-var?
                        :tuple ::args-list
@@ -1153,7 +1154,7 @@
         triple-clauses (remove leaf-triple-clauses triple-clauses)
         leaf-preds (for [{:keys [e a v]} leaf-triple-clauses]
                      {:pred {:pred-fn 'get-attr :args [e a]}
-                      :return [:collection v]})]
+                      :return [:collection [v '...]]})]
     (assoc type->clauses
            :triple triple-clauses
            :pred (vec (concat pred-clauses leaf-preds)))))
@@ -1181,7 +1182,7 @@
                                     (binding [nippy/*freeze-fallback* :write-unfreezable]
                                       (idx/new-singleton-virtual-index scalar (partial db/encode-value index-snapshot))))
                          :args ['$ scalar-var]}
-                  :return [:collection return-binding]}])
+                  :return [:collection [return-binding '...]]}])
 
               :tuple
               (let [tuple-var (gensym (str "tuple_" (string/join "_" return-binding)))]
@@ -1193,7 +1194,7 @@
                                   (binding [nippy/*freeze-fallback* :write-unfreezable]
                                     (idx/new-singleton-virtual-index (nth tuple idx nil) (partial db/encode-value index-snapshot))))
                                 :args ['$ tuple-var idx]}
-                         :return [:collection var]})))
+                         :return [:collection [var '...]]})))
 
               :relation
               (let [return-binding (first return-binding)
@@ -1222,7 +1223,7 @@
                                                    (let [path (mapv #(db/encode-value index-snapshot %) path)]
                                                      (idx/new-sorted-virtual-index (get-in relation path))))
                                         :args (vec (cons '$ (cons reordered-relation-var path)))}
-                                 :return [:collection var]})
+                                 :return [:collection [var '...]]})
                       (conj path var)])
                    [[] []]
                    tuple-vars-in-join-order))))
