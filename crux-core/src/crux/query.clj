@@ -25,7 +25,7 @@
            crux.codec.EntityTx
            crux.index.IndexStoreIndexState
            (java.io Closeable Writer)
-           (java.util Comparator Date List UUID)
+           (java.util Comparator Date List UUID TreeMap)
            [java.util.concurrent Future Executors ScheduledExecutorService TimeoutException TimeUnit]))
 
 (defn- logic-var? [x]
@@ -491,6 +491,9 @@
 (defn- find-binding-vars [binding]
   (some->> binding (vector) (flatten) (filter logic-var?)))
 
+(defn- distinct-vars? [vars]
+  (= (count vars) (count (set vars))))
+
 (defn- collect-vars [{triple-clauses :triple
                       not-clauses :not
                       not-join-clauses :not-join
@@ -768,8 +771,7 @@
                                                        [(set/difference or-vars known-vars)
                                                         (set/intersection or-vars known-vars)])]]
                               (do (when or-join?
-                                    (when-not (= (count free-args)
-                                                 (count (set free-args)))
+                                    (when-not (distinct-vars? free-args)
                                       (throw (IllegalArgumentException.
                                               (str "Or join free variables not distinct: " (cio/pr-edn-str clause)))))
                                     (doseq [var or-vars
@@ -935,13 +937,7 @@
           (not-empty result)))
 
     (:tuple :relation)
-    (let [result (if (= :relation bind-type)
-                   result
-                   [result])]
-      (->> (for [tuple result]
-             (mapv #(nth tuple % nil) tuple-idxs-in-join-order))
-           (idx/update-relation-virtual-index! idx))
-      (not-empty result))
+    (throw (IllegalStateException. "Should have flattened away all tuple and relation bindings."))
 
     result))
 
@@ -1053,8 +1049,7 @@
                         :tuple-idxs-in-join-order return-vars-tuple-idxs-in-join-order
                         :rule-name->rules rule-name->rules}]]
     (do (validate-existing-vars var->bindings clause pred-vars)
-        (when-not (= (count return-vars)
-                     (count (set return-vars)))
+        (when-not (distinct-vars? return-vars)
           (throw (IllegalArgumentException.
                   (str "Return variables not distinct: " (cio/pr-edn-str clause)))))
         (s/assert ::pred-args (cond-> [pred-fn (vec args)]
@@ -1207,6 +1202,72 @@
    depth->join-depth
    constraints))
 
+(defn- flatten-pred-clauses [pred-clauses join-order]
+  (->> (for [{:keys [return pred] :as clause} pred-clauses
+             :let [[return-type return-binding] return
+                   return-vars (find-binding-vars return-binding)]]
+          (if-not (distinct-vars? return-vars)
+            (throw (IllegalArgumentException.
+                    (str "Return variables not distinct: " (cio/pr-edn-str clause))))
+            (case return-type
+              :scalar
+              (let [scalar-var (gensym (str "scalar_" return-binding))]
+                [{:pred pred
+                  :return [:scalar scalar-var]}
+                 {:pred {:pred-fn (fn [{:keys [index-snapshot] :as db} scalar]
+                                    (binding [nippy/*freeze-fallback* :write-unfreezable]
+                                      (idx/new-singleton-virtual-index scalar (partial db/encode-value index-snapshot))))
+                         :args ['$ scalar-var]}
+                  :return [:collection return-binding]}])
+
+              :tuple
+              (let [tuple-var (gensym (str "tuple_" (string/join "_" return-binding)))]
+                (cons {:pred pred
+                       :return [:scalar tuple-var]}
+                      (for [[idx var] (map-indexed vector return-binding)]
+                        {:pred {:pred-fn
+                                (fn [{:keys [index-snapshot] :as db} tuple idx]
+                                  (binding [nippy/*freeze-fallback* :write-unfreezable]
+                                    (idx/new-singleton-virtual-index (nth tuple idx nil) (partial db/encode-value index-snapshot))))
+                                :args ['$ tuple-var idx]}
+                         :return [:collection var]})))
+
+              :relation
+              (let [return-binding (first return-binding)
+                    relation-var (gensym (str "relation_" (string/join "_" return-binding)))
+                    reordered-relation-var (gensym (str "re-ordered-relation_" (string/join "_" return-binding)))
+                    tuple-vars-in-join-order (keep (set return-binding) join-order)
+                    tuple-idxs-in-join-order (mapv (zipmap return-binding (range))
+                                                   tuple-vars-in-join-order)]
+                (concat
+                 [{:pred pred
+                   :return [:scalar relation-var]}
+                  {:pred {:pred-fn (fn [{:keys [index-snapshot] :as db} relation]
+                                     (binding [nippy/*freeze-fallback* :write-unfreezable]
+                                       (->> (for [tuple relation]
+                                              (mapv #(db/encode-value index-snapshot (nth tuple % nil)) tuple-idxs-in-join-order))
+                                            (reduce
+                                             (fn [acc tuple]
+                                               (idx/tree-map-put-in acc tuple nil))
+                                             (TreeMap. mem/buffer-comparator)))))
+                          :args ['$ relation-var]}
+                   :return [:scalar reordered-relation-var]}]
+                 (first
+                  (reduce
+                   (fn [[acc path] var]
+                     [(conj acc {:pred {:pred-fn (fn [{:keys [index-snapshot] :as db} relation & path]
+                                                   (let [path (mapv #(db/encode-value index-snapshot %) path)]
+                                                     (idx/new-sorted-virtual-index (get-in relation path))))
+                                        :args (vec (cons '$ (cons reordered-relation-var path)))}
+                                 :return [:collection var]})
+                      (conj path var)])
+                   [[] []]
+                   tuple-vars-in-join-order))))
+              :collection
+              [clause]
+              [clause])))
+       (reduce into [])))
+
 (defn- compile-sub-query [encode-value-fn where in rule-name->rules stats]
   (let [where (expand-rules where rule-name->rules {})
         in-vars (set (find-binding-vars (:bindings in)))
@@ -1233,6 +1294,7 @@
                              (not-pred-clauses :not not-clauses)
                              (not-pred-clauses :not-join not-join-clauses)
                              (triple-pred-clauses triple-clauses range-vars top-level-known-vars stats))
+        pred-clauses (flatten-pred-clauses pred-clauses (calculate-join-order pred-clauses))
         [pred-clause+idx-ids var->joins] (pred-joins pred-clauses)
         join-depth (count var->joins)
         vars-in-join-order (calculate-join-order pred-clauses)
@@ -1335,8 +1397,7 @@
 (defn- validate-in [in]
   (doseq [binding (:bindings in)
           :let [binding-vars (find-binding-vars binding)]]
-    (when-not (= (count binding-vars)
-                 (count (set binding-vars)))
+    (when-not (distinct-vars? binding-vars)
       (throw (IllegalArgumentException.
               (str "In binding variables not distinct: " (cio/pr-edn-str binding)))))))
 

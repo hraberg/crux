@@ -304,7 +304,7 @@
       (when (.hasNext iterator)
         (.next iterator)))))
 
-(defn- new-sorted-virtual-index [m]
+(defn new-sorted-virtual-index [m]
   (->SortedVirtualIndex m (SortedVirtualIndexState. nil)))
 
 (defrecord RelationVirtualIndex [max-depth ^RelationVirtualIndexState state encode-value-fn]
@@ -342,7 +342,7 @@
   (max-depth [_]
     max-depth))
 
-(defn- tree-map-put-in [^TreeMap m [k & ks] v]
+(defn tree-map-put-in [^TreeMap m [k & ks] v]
   (if ks
     (doto m
       (-> (.computeIfAbsent k
