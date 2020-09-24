@@ -256,7 +256,7 @@
             (assoc-in [:q-conformed :args] args)))
       conformed-query)))
 
-(declare open-index-snapshot build-sub-query)
+(declare open-index-snapshot execute-sub-query)
 
 ;; NOTE: :min-count generates boxed math warnings, so this goes below
 ;; the spec.
@@ -548,6 +548,30 @@
                                   arg))
                            or-join-vars)}))
 
+(defn- pred-joins [pred-clauses]
+  (->> pred-clauses
+       (reduce
+        (fn [[pred-clause+idx-ids var->joins] {:keys [return] :as pred-clause}]
+          (if return
+            (let [idx-id (gensym "pred-return")
+                  return-vars (find-binding-vars return)
+                  join {:id idx-id
+                        :idx-fn
+                        (fn [_ index-snapshot _]
+                          (idx/new-relation-virtual-index []
+                                                          (count return-vars)
+                                                          (partial db/encode-value index-snapshot)))}]
+              [(conj pred-clause+idx-ids [pred-clause idx-id])
+               (->> return-vars
+                    (reduce
+                     (fn [var->joins return-var]
+                       (->> {return-var [join]}
+                            (merge-with into var->joins)))
+                     var->joins))])
+            [(conj pred-clause+idx-ids [pred-clause])
+             var->joins]))
+        [[] {}])))
+
 (defn- sort-triple-clauses [stats triple-clauses]
   (sort-by (fn [{:keys [a]}]
              (get stats a 0)) triple-clauses))
@@ -574,8 +598,9 @@
                                        v)))
         self-join-clauses (filter (comp :self-join? meta) triple-clauses)
         self-join-vars (map :v self-join-clauses)
+        var-triple-clauses (remove (set literal-clauses) triple-clauses)
         join-order (loop [join-order (concat literal-join-order self-join-vars)
-                          clauses (remove (set literal-clauses) triple-clauses)]
+                          clauses var-triple-clauses]
                      (let [join-order-set (set join-order)
                            clause (first (or (seq (for [{:keys [e v] :as clause} clauses
                                                         :when (or (contains? join-order-set e)
@@ -591,122 +616,92 @@
         join-order (filter logic-var? join-order)]
     (log/debug :triple-joins-var->frequency var->frequency)
     (log/debug :triple-joins-join-order join-order)
-    (distinct join-order)))
+    [(distinct join-order)
+     literal-clauses
+     var-triple-clauses]))
 
-(defn- pred-joins [pred-clauses]
-  (->> pred-clauses
-       (reduce
-        (fn [[pred-clause+idx-ids var->joins] {:keys [return] :as pred-clause}]
-          (if return
-            (let [idx-id (gensym "pred-return")
-                  return-vars (find-binding-vars return)
-                  join {:id idx-id
-                        :idx-fn
-                        (fn [_ index-snapshot _]
-                          (idx/new-relation-virtual-index []
-                                                          (count return-vars)
-                                                          (partial db/encode-value index-snapshot)))}]
-              [(conj pred-clause+idx-ids [pred-clause idx-id])
-               (->> return-vars
-                    (reduce
-                     (fn [var->joins return-var]
-                       (->> {return-var [join]}
-                            (merge-with into var->joins)))
-                     var->joins))])
-            [(conj pred-clause+idx-ids [pred-clause])
-             var->joins]))
-        [[] {}])))
+(defn- build-literal-triple-pred-clause [{:keys [e a v] :as clause}]
+  (let [snapshot-id (gensym 'snapshot-id)]
+    (cond
+      (and (literal? e) (literal? v))
+      {:pred {:pred-fn (fn literal-ev-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
+                         (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
+                           (some->> (db/aev nested-index-snapshot a e v entity-resolver-fn)
+                                    (not-empty)
+                                    (first)
+                                    (db/decode-value nested-index-snapshot)
+                                    (= v))))
+              :args ['$]}}
 
-;; TODO: This is a naive, but not totally irrelevant measure. Aims to
-;; bind variables as early and cheaply as possible.
-(defn- clause-complexity [clause]
-  (count (cio/pr-edn-str clause)))
+      (literal? e)
+      {:pred {:pred-fn (let [id (gensym 'snapshot-id)]
+                         (fn literal-e-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
+                           (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
+                             (idx/new-index-store-index
+                              (fn [v]
+                                (db/aev nested-index-snapshot a e v entity-resolver-fn))))))
+              :args ['$]}
+       :return [:collection [v '...]]}
+
+      (literal? v)
+      {:pred {:pred-fn (fn literal-v-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
+                         (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
+                           (idx/new-index-store-index
+                            (fn [e]
+                              (db/ave nested-index-snapshot a v e entity-resolver-fn)))))
+              :args ['$]}
+       :return [:collection [e '...]]})))
+
+(defn build-var-triple-pred-clause [{:keys [e a v] :as clause} known-vars var]
+  (let [snapshot-id (gensym 'snapshot-id)]
+   (cond
+     (= e var)
+     (if (contains? known-vars v)
+       {:pred {:pred-fn (fn ave-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} v]
+                          (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
+                            (idx/new-index-store-index
+                             (fn [e]
+                               (db/ave nested-index-snapshot a v e entity-resolver-fn)))))
+               :args ['$ v]}
+        :return [:collection [e '...]]}
+       {:pred {:pred-fn (fn ae-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
+                          (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
+                            (idx/new-index-store-index
+                             (fn [e]
+                               (db/ae nested-index-snapshot a e entity-resolver-fn)))))
+               :args ['$]}
+        :return [:collection [e '...]]})
+
+     (= v var)
+     (if (contains? known-vars e)
+       {:pred {:pred-fn (fn aev-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} e]
+                          (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
+                            (idx/new-index-store-index
+                             (fn [v]
+                               (db/aev nested-index-snapshot a e v entity-resolver-fn)))))
+               :args ['$ e]}
+        :return [:collection [v '...]]}
+       {:pred {:pred-fn (fn av-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
+                          (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
+                            (idx/new-index-store-index
+                             (fn [v]
+                               (db/av nested-index-snapshot a v entity-resolver-fn)))))
+               :args ['$]}
+        :return [:collection [v '...]]}))))
 
 (defn- triple-pred-clauses [triple-clauses range-vars known-vars stats]
-  (let [triple-join-order (triple-join-order triple-clauses
-                                             known-vars
-                                             range-vars
-                                             stats)
-        literal-clauses (for [{:keys [e v] :as clause} triple-clauses
-                              :when (or (literal? e)
-                                        (literal? v))]
-                          clause)
-        literal-vars (set (for [{:keys [e v] :as clause} literal-clauses
-                                var [e v]
-                                :when (logic-var? var)]
-                            var))
-        literal-preds (for [{:keys [e a v] :as clause} literal-clauses
-                            :let [snapshot-id (gensym 'snapshot-id)]]
-                        (cond
-                          (and (literal? e) (literal? v))
-                          {:pred {:pred-fn (fn literal-ev-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
-                                             (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                                               (some->> (db/aev nested-index-snapshot a e v entity-resolver-fn)
-                                                        (not-empty)
-                                                        (first)
-                                                        (db/decode-value nested-index-snapshot)
-                                                        (= v))))
-                                  :args ['$]}}
-
-                          (literal? e)
-                          {:pred {:pred-fn (let [id (gensym 'snapshot-id)]
-                                             (fn literal-e-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
-                                               (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                                                 (idx/new-index-store-index
-                                                  (fn [v]
-                                                    (db/aev nested-index-snapshot a e v entity-resolver-fn))))))
-                                  :args ['$]}
-                           :return [:collection [v '...]]}
-
-                          (literal? v)
-                          {:pred {:pred-fn (fn literal-v-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
-                                             (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                                               (idx/new-index-store-index
-                                                (fn [e]
-                                                  (db/ave nested-index-snapshot a v e entity-resolver-fn)))))
-                                  :args ['$]}
-                           :return [:collection [e '...]]}))
-        triple-clauses (set (remove (set literal-clauses) triple-clauses))]
+  (let [[triple-join-order literal-clauses var-triple-clauses] (triple-join-order triple-clauses
+                                                                                  known-vars
+                                                                                  range-vars
+                                                                                  stats)
+        literal-preds (for [literal-clause literal-clauses]
+                        (build-literal-triple-pred-clause literal-clause))]
     (first
      (reduce
       (fn [[acc known-vars clauses] var]
         (let [triple-preds (for [{:keys [e a v] :as clause} clauses
-                                 :when (or (= e var) (= v var))
-                                 :let [snapshot-id (gensym 'snapshot-id)]]
-                             (cond
-                               (= e var)
-                               (if (contains? known-vars v)
-                                 {:pred {:pred-fn (fn ave-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} v]
-                                                    (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                                                      (idx/new-index-store-index
-                                                       (fn [e]
-                                                         (db/ave nested-index-snapshot a v e entity-resolver-fn)))))
-                                         :args ['$ v]}
-                                  :return [:collection [e '...]]}
-                                 {:pred {:pred-fn (fn ae-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
-                                                    (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                                                      (idx/new-index-store-index
-                                                       (fn [e]
-                                                         (db/ae nested-index-snapshot a e entity-resolver-fn)))))
-                                         :args ['$]}
-                                  :return [:collection [e '...]]})
-
-                               (= v var)
-                               (if (contains? known-vars e)
-                                 {:pred {:pred-fn (fn aev-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} e]
-                                                    (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                                                      (idx/new-index-store-index
-                                                       (fn [v]
-                                                         (db/aev nested-index-snapshot a e v entity-resolver-fn)))))
-                                         :args ['$ e]}
-                                  :return [:collection [v '...]]}
-                                 {:pred {:pred-fn (fn av-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db}]
-                                                    (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                                                      (idx/new-index-store-index
-                                                       (fn [v]
-                                                         (db/av nested-index-snapshot a v entity-resolver-fn)))))
-                                         :args ['$]}
-                                  :return [:collection [v '...]]})))
+                                 :when (or (= e var) (= v var))]
+                             (build-var-triple-pred-clause clause known-vars var))
               known-vars (conj known-vars var)]
           [(into acc triple-preds)
            known-vars
@@ -714,7 +709,9 @@
                  :when (not (and (contains? known-vars e)
                                  (contains? known-vars v)))]
              clause)]))
-      [literal-preds known-vars triple-clauses]
+      [literal-preds
+       known-vars
+       var-triple-clauses]
       triple-join-order))))
 
 (defn- build-or-pred-clause [clause [{:keys [free-vars bound-vars]} :as or-branches]]
@@ -749,6 +746,11 @@
                              :branch-index branch-index})
                           bound-vars))}
         :return [:scalar branch-return]}))))
+
+;; TODO: This is a naive, but not totally irrelevant measure. Aims to
+;; bind variables as early and cheaply as possible.
+(defn- clause-complexity [clause]
+  (count (cio/pr-edn-str clause)))
 
 (defn- or-pred-clauses [or-type or-clauses known-vars]
   (->> (sort-by clause-complexity or-clauses)
@@ -1304,7 +1306,7 @@
                                                     logic-var+range-constraint)))))
     compiled-query))
 
-(defn- build-sub-query [index-snapshot {:keys [query-cache] :as db} where in rule-name->rules stats]
+(defn- execute-sub-query [index-snapshot {:keys [query-cache] :as db} where in rule-name->rules stats]
   (let [encode-value-fn (partial db/encode-value index-snapshot)
         {:keys [depth->constraints
                 vars-in-join-order
@@ -1587,11 +1589,12 @@
           db (assoc db :index-snapshot index-snapshot :in-args in-args)
           entity-resolver-fn (or (:entity-resolver-fn db)
                                  (new-entity-resolver-fn db))
-          open-nested-index-snapshot-fn (memoize
-                                         (fn [id]
-                                           (db/open-nested-index-snapshot index-snapshot)))
+          open-nested-index-snapshot-fn (or (:open-nested-index-snapshot-fn db)
+                                            (memoize
+                                             (fn [id]
+                                               (db/open-nested-index-snapshot index-snapshot))))
           db (assoc db :entity-resolver-fn entity-resolver-fn :open-nested-index-snapshot-fn open-nested-index-snapshot-fn)
-          {:keys [n-ary-join var->bindings] :as built-query} (build-sub-query index-snapshot db where in rule-name->rules stats)
+          {:keys [n-ary-join var->bindings] :as built-query} (execute-sub-query index-snapshot db where in rule-name->rules stats)
           compiled-find (compile-find find (assoc built-query :full-results? full-results?) db)
           find-logic-vars (mapv :logic-var compiled-find)
           var-types (set (map :var-type compiled-find))
