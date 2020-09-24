@@ -548,7 +548,7 @@
   (sort-by (fn [{:keys [a]}]
              (get stats a 0)) triple-clauses))
 
-(defn- triple-joins [triple-clauses in-vars range-vars stats]
+(defn- triple-join-order [triple-clauses in-vars range-vars stats]
   (let [var->frequency (->> (concat (map :e triple-clauses)
                                     (map :v triple-clauses)
                                     range-vars)
@@ -618,8 +618,12 @@
 (defn- clause-complexity [clause]
   (count (cio/pr-edn-str clause)))
 
-(defn- triple-pred-clauses [triple-clauses triple-join-order in-vars]
-  (let [literal-clauses (for [{:keys [e v] :as clause} triple-clauses
+(defn- triple-pred-clauses [triple-clauses range-vars known-vars stats]
+  (let [triple-join-order (triple-join-order triple-clauses
+                                             known-vars
+                                             range-vars
+                                             stats)
+        literal-clauses (for [{:keys [e v] :as clause} triple-clauses
                               :when (or (literal? e)
                                         (literal? v))]
                           clause)
@@ -656,8 +660,7 @@
                                                   (db/ave nested-index-snapshot a v e entity-resolver-fn)))))
                                   :args ['$]}
                            :return [:collection [e '...]]}))
-        triple-clauses (set (remove (set literal-clauses) triple-clauses))
-        known-vars (set in-vars)]
+        triple-clauses (set (remove (set literal-clauses) triple-clauses))]
     (first
      (reduce
       (fn [[acc known-vars clauses] var]
@@ -1218,21 +1221,18 @@
         {:keys [e-vars
                 v-vars
                 range-vars]} (collect-vars type->clauses)
+        top-level-known-vars (add-pred-returns-bound-at-top-level in-vars pred-clauses)
         known-vars (set/union e-vars v-vars in-vars)
         known-vars (add-pred-returns-bound-at-top-level known-vars pred-clauses)
         [or-preds known-vars] (or-pred-clauses :or or-clauses known-vars)
         [or-join-preds known-vars] (or-pred-clauses :or-join or-join-clauses known-vars)
-        triple-join-order (triple-joins triple-clauses
-                                        in-vars
-                                        range-vars
-                                        stats)
         pred-clauses (concat pred-clauses
                              (in-pred-clauses (:bindings in))
                              or-preds
                              or-join-preds
                              (not-pred-clauses :not not-clauses)
                              (not-pred-clauses :not-join not-join-clauses)
-                             (triple-pred-clauses triple-clauses triple-join-order in-vars))
+                             (triple-pred-clauses triple-clauses range-vars top-level-known-vars stats))
         [pred-clause+idx-ids var->joins] (pred-joins pred-clauses)
         join-depth (count var->joins)
         vars-in-join-order (calculate-join-order pred-clauses)
