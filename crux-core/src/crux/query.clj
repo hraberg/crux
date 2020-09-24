@@ -141,10 +141,11 @@
 (s/def ::arg-tuple (s/map-of (some-fn logic-var? keyword?) any?))
 (s/def ::args (s/coll-of ::arg-tuple :kind vector?))
 
-(s/def ::rule-head (s/and list?
+(s/def ::rule-head (s/and seq?
                           (s/cat :name (s/and symbol? (complement built-ins))
                                  :args ::rule-args)))
 (s/def ::rule-definition (s/and vector?
+                                (s/conformer identity vec)
                                 (s/cat :head ::rule-head
                                        :body (s/+ ::term))))
 (s/def ::rules (s/coll-of ::rule-definition :kind vector? :min-count 1))
@@ -256,7 +257,7 @@
             (assoc-in [:q-conformed :args] args)))
       conformed-query)))
 
-(declare open-index-snapshot execute-sub-query)
+(declare open-index-snapshot execute-sub-query compile-find)
 
 ;; NOTE: :min-count generates boxed math warnings, so this goes below
 ;; the spec.
@@ -944,11 +945,10 @@
 
 (def ^:private ^:dynamic *recursion-table* {})
 
-(defmethod pred-constraint 'q [_ {:keys [idx-id arg-bindings rule-name->rules return-type]
+(defmethod pred-constraint 'q [_ {:keys [idx-id arg-bindings rules return-type]
                                   :as pred-ctx}]
   (let [query (normalize-query (second arg-bindings))
-        {:keys [rule-name branch-index]} (meta query)
-        parent-rules (:rules (meta rule-name->rules))]
+        {:keys [rule-name branch-index]} (meta query)]
     (fn pred-constraint [index-snapshot db idx-id->idx join-keys]
       (let [[_ _ & args] (for [arg-binding arg-bindings]
                            (if (instance? VarBinding arg-binding)
@@ -957,7 +957,7 @@
             cache-key (when rule-name
                         [rule-name branch-index args])
             query (cond-> query
-                    (seq parent-rules) (update :rules (comp vec concat) parent-rules)
+                    (seq rules) (update :rules (comp vec concat) rules)
                     (nil? return-type) (assoc :limit 1))]
         (if-let [cached-result (when cache-key
                                  (get *recursion-table* cache-key))]
@@ -1004,7 +1004,7 @@
       (binding [nippy/*freeze-fallback* :write-unfreezable]
         (bind-binding return-type (get idx-id->idx idx-id) pred-result)))))
 
-(defn- build-pred-constraints [rule-name->rules encode-value-fn pred-clause+idx-ids var->bindings vars-in-join-order]
+(defn- build-pred-constraints [rules encode-value-fn pred-clause+idx-ids var->bindings vars-in-join-order]
   (for [[{:keys [pred return] :as clause} idx-id] pred-clause+idx-ids
         :let [{:keys [pred-fn args]} pred
               pred-vars (filter logic-var? (cons pred-fn args))
@@ -1020,7 +1020,7 @@
                         :idx-id idx-id
                         :arg-bindings arg-bindings
                         :return-type return-type
-                        :rule-name->rules rule-name->rules}]]
+                        :rules rules}]]
     (do (validate-existing-vars var->bindings clause pred-vars)
         (when-not (distinct-vars? return-vars)
           (throw (IllegalArgumentException.
@@ -1234,8 +1234,10 @@
              [clause])))
        (reduce into [])))
 
-(defn- compile-sub-query [encode-value-fn where in rule-name->rules stats]
-  (let [where (expand-rules where rule-name->rules {})
+(defn- compile-sub-query [encode-value-fn {:keys [find where in rules full-results?]} stats]
+  (let [rule-name->rules (rule-name->rules rules)
+        rules (s/unform ::rules rules)
+        where (expand-rules where rule-name->rules {})
         in-vars (set (find-binding-vars (:bindings in)))
         {triple-clauses :triple
          range-clauses :range
@@ -1268,14 +1270,15 @@
         var->bindings (build-pred-return-var-bindings var->values-result-index pred-clauses)
         var->range-constraints (build-var-range-constraints encode-value-fn range-clauses var->bindings)
         var->logic-var-range-constraint-fns (build-logic-var-range-constraint-fns encode-value-fn range-clauses var->bindings)
-        pred-constraints (build-pred-constraints rule-name->rules encode-value-fn pred-clause+idx-ids var->bindings vars-in-join-order)
+        pred-constraints (build-pred-constraints rules encode-value-fn pred-clause+idx-ids var->bindings vars-in-join-order)
         depth->constraints (update-depth->constraints (vec (repeat join-depth nil)) pred-constraints)]
     {:depth->constraints depth->constraints
      :var->range-constraints var->range-constraints
      :var->logic-var-range-constraint-fns var->logic-var-range-constraint-fns
      :vars-in-join-order vars-in-join-order
      :var->joins var->joins
-     :var->bindings var->bindings}))
+     :var->bindings var->bindings
+     :compiled-find (compile-find find var->bindings full-results?)}))
 
 (defn- build-idx-id->idx [db index-snapshot {:keys [var->joins] :as compiled-query}]
   (->> (for [[_ joins] var->joins
@@ -1306,20 +1309,22 @@
                                                     logic-var+range-constraint)))))
     compiled-query))
 
-(defn- execute-sub-query [index-snapshot {:keys [query-cache] :as db} where in rule-name->rules stats]
+(defn- execute-sub-query [index-snapshot {:keys [query-cache] :as db} {:keys [where] :as query} stats]
   (let [encode-value-fn (partial db/encode-value index-snapshot)
+        query (select-keys query [:find :where :in :rules :full-results?])
         {:keys [depth->constraints
                 vars-in-join-order
                 var->range-constraints
                 var->logic-var-range-constraint-fns
                 var->joins
-                var->bindings]
+                var->bindings
+                compiled-find]
          :as compiled-query} (-> (lru/compute-if-absent
                                   query-cache
-                                  [where in rule-name->rules]
+                                  query
                                   identity
                                   (fn [_]
-                                    (compile-sub-query encode-value-fn where in rule-name->rules stats)))
+                                    (compile-sub-query encode-value-fn query stats)))
                                  (add-logic-var-constraints))
         idx-id->idx (build-idx-id->idx db index-snapshot compiled-query)
         unary-join-indexes (for [v vars-in-join-order]
@@ -1337,7 +1342,7 @@
     {:n-ary-join (when (constrain-result-fn [])
                    (-> (idx/new-n-ary-join-layered-virtual-index unary-join-indexes)
                        (idx/new-n-ary-constraining-layered-virtual-index constrain-result-fn)))
-     :var->bindings var->bindings}))
+     :compiled-find compiled-find}))
 
 (defn- open-index-snapshot ^java.io.Closeable [{:keys [index-store index-snapshot] :as db}]
   (if index-snapshot
@@ -1488,7 +1493,7 @@
     (fn [value db]
       (project-child value root-fns db))))
 
-(defn- compile-find [conformed-find {:keys [var->bindings full-results?]} {:keys [projection-cache]}]
+(defn- compile-find [conformed-find var->bindings full-results?]
   (for [[var-type arg] conformed-find]
     (case var-type
       :logic-var {:logic-var arg
@@ -1505,10 +1510,7 @@
       :project {:logic-var (:logic-var arg)
                 :var-type :project
                 :var-binding (var->bindings (:logic-var arg))
-                :->result (lru/compute-if-absent projection-cache (:project-spec arg)
-                                                 identity
-                                                 (fn [spec]
-                                                   (compile-project-spec (s/unform ::eql/query spec))))}
+                :->result (compile-project-spec (s/unform ::eql/query (:project-spec arg)))}
       :aggregate (do (s/assert ::aggregate-args [(:aggregate-fn arg) (vec (:args arg))])
                      {:logic-var (:logic-var arg)
                       :var-type :aggregate
@@ -1571,9 +1573,9 @@
 
 (defn query-plan-for [q encode-value-fn stats]
   (s/assert ::query q)
-  (let [{:keys [where in rules]} (s/conform ::query q)
+  (let [{:keys [where in rules] :as conformed-q} (s/conform ::query q)
         [in in-args] (add-legacy-args q [])]
-    (compile-sub-query encode-value-fn where in (rule-name->rules rules) stats)))
+    (compile-sub-query encode-value-fn (assoc conformed-q :in in) stats)))
 
 (defn query [{:keys [valid-time transact-time document-store index-store index-snapshot] :as db} ^ConformedQuery conformed-q in-args]
   (let [q (.q-normalized conformed-q)
@@ -1585,17 +1587,17 @@
                                           (assoc :in in)
                                           (dissoc :args))))
     (validate-in in)
-    (let [rule-name->rules (with-meta (rule-name->rules rules) {:rules (:rules q)})
-          db (assoc db :index-snapshot index-snapshot :in-args in-args)
+    (let [db (assoc db :index-snapshot index-snapshot :in-args in-args)
           entity-resolver-fn (or (:entity-resolver-fn db)
                                  (new-entity-resolver-fn db))
           open-nested-index-snapshot-fn (or (:open-nested-index-snapshot-fn db)
                                             (memoize
                                              (fn [id]
                                                (db/open-nested-index-snapshot index-snapshot))))
+          q-conformed (assoc q-conformed :in in)
           db (assoc db :entity-resolver-fn entity-resolver-fn :open-nested-index-snapshot-fn open-nested-index-snapshot-fn)
-          {:keys [n-ary-join var->bindings] :as built-query} (execute-sub-query index-snapshot db where in rule-name->rules stats)
-          compiled-find (compile-find find (assoc built-query :full-results? full-results?) db)
+
+          {:keys [n-ary-join compiled-find] :as built-query} (execute-sub-query index-snapshot db q-conformed stats)
           find-logic-vars (mapv :logic-var compiled-find)
           var-types (set (map :var-type compiled-find))
           aggregate? (contains? var-types :aggregate)
