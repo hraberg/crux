@@ -1271,14 +1271,15 @@
         var->range-constraints (build-var-range-constraints encode-value-fn range-clauses var->bindings)
         var->logic-var-range-constraint-fns (build-logic-var-range-constraint-fns encode-value-fn range-clauses var->bindings)
         pred-constraints (build-pred-constraints rules encode-value-fn pred-clause+idx-ids var->bindings vars-in-join-order)
-        depth->constraints (update-depth->constraints (vec (repeat join-depth nil)) pred-constraints)]
+        depth->constraints (update-depth->constraints (vec (repeat join-depth nil)) pred-constraints)
+        compiled-find (compile-find find var->bindings full-results?)]
     {:depth->constraints depth->constraints
      :var->range-constraints var->range-constraints
      :var->logic-var-range-constraint-fns var->logic-var-range-constraint-fns
      :vars-in-join-order vars-in-join-order
      :var->joins var->joins
      :var->bindings var->bindings
-     :compiled-find (compile-find find var->bindings full-results?)}))
+     :compiled-find compiled-find}))
 
 (defn- build-idx-id->idx [db index-snapshot {:keys [var->joins] :as compiled-query}]
   (->> (for [[_ joins] var->joins
@@ -1334,14 +1335,19 @@
                                              (idx-fn db index-snapshot compiled-query)))))
                                  (idx/wrap-with-range-constraints (get var->range-constraints v))))
         constrain-result-fn (fn [join-keys]
-                              (constrain-join-result-by-constraints index-snapshot db idx-id->idx depth->constraints join-keys))]
+                              (constrain-join-result-by-constraints index-snapshot db idx-id->idx depth->constraints join-keys))
+        var-bindings (mapv :var-binding compiled-find)]
     (log/debug :where (cio/pr-edn-str where))
     (log/debug :vars-in-join-order vars-in-join-order)
     (log/debug :attr-stats (cio/pr-edn-str stats))
     (log/debug :var->bindings (cio/pr-edn-str var->bindings))
-    {:n-ary-join (when (constrain-result-fn [])
-                   (-> (idx/new-n-ary-join-layered-virtual-index unary-join-indexes)
-                       (idx/new-n-ary-constraining-layered-virtual-index constrain-result-fn)))
+    {:result-seq (when (constrain-result-fn [])
+                   (let [n-ary-join (-> (idx/new-n-ary-join-layered-virtual-index unary-join-indexes)
+                                        (idx/new-n-ary-constraining-layered-virtual-index constrain-result-fn))]
+                     (for [join-keys (idx/layered-idx->seq n-ary-join)]
+                       (mapv (fn [var-binding]
+                               (bound-result-for-var index-snapshot var-binding join-keys))
+                             var-bindings))))
      :compiled-find compiled-find}))
 
 (defn- open-index-snapshot ^java.io.Closeable [{:keys [index-store index-snapshot] :as db}]
@@ -1596,13 +1602,11 @@
                                                (db/open-nested-index-snapshot index-snapshot))))
           q-conformed (assoc q-conformed :in in)
           db (assoc db :entity-resolver-fn entity-resolver-fn :open-nested-index-snapshot-fn open-nested-index-snapshot-fn)
-
-          {:keys [n-ary-join compiled-find] :as built-query} (execute-sub-query index-snapshot db q-conformed stats)
+          {:keys [result-seq compiled-find] :as built-query} (execute-sub-query index-snapshot db q-conformed stats)
           find-logic-vars (mapv :logic-var compiled-find)
           var-types (set (map :var-type compiled-find))
           aggregate? (contains? var-types :aggregate)
           project? (or (contains? var-types :project) full-results?)
-          var-bindings (mapv :var-binding compiled-find)
           ->result-fns (mapv :->result compiled-find)]
       (doseq [{:keys [logic-var var-binding]} compiled-find
               :when (nil? var-binding)]
@@ -1614,10 +1618,7 @@
                 (str "Order by requires an element from :find. unreturned element: " find-arg))))
 
       (lazy-seq
-       (cond->> (for [join-keys (idx/layered-idx->seq n-ary-join)]
-                  (mapv (fn [var-binding]
-                          (bound-result-for-var index-snapshot var-binding join-keys))
-                        var-bindings))
+       (cond->> result-seq
 
          aggregate? (aggregate-result compiled-find)
          order-by (cio/external-sort (order-by-comparator find order-by))
