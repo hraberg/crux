@@ -491,7 +491,7 @@
        (apply merge-with into)))
 
 (defn- find-binding-vars [binding]
-  (some->> binding (vector) (flatten) (filter logic-var?)))
+  (some->> binding (vector) (flatten) (filter logic-var?) (not-empty)))
 
 (defn- distinct-vars? [vars]
   (= (count vars) (count (set vars))))
@@ -1036,11 +1036,13 @@
 
 (defn- calculate-join-order [pred-clauses]
   (let [g (reduce
-           (fn [g {:keys [pred return] :as pred-clause}]
+           (fn [g {:keys [pred return predicate] :as pred-clause}]
              (let [pred-vars (filter logic-var? (:args pred))]
                (->> (for [pred-var (cons ::root pred-vars)
-                          :when return
-                          return-var (find-binding-vars return)]
+                          :when (or predicate return)
+                          return-var (if predicate
+                                       [predicate]
+                                       (find-binding-vars return))]
                       [return-var pred-var])
                     (reduce
                      (fn [g [r a]]
@@ -1230,7 +1232,7 @@
                   tuple-vars-in-join-order))))
              :collection
              [clause]
-             [clause])))
+             [(assoc clause :predicate (keyword (gensym (str "predicate_"))))])))
        (reduce into [])))
 
 (defn- compile-sub-query [encode-value-fn {:keys [find where in rules full-results?]} stats]
@@ -1265,6 +1267,15 @@
         [pred-clause+idx-ids var->joins] (pred-joins flat-pred-clauses)
         join-depth (count var->joins)
         vars-in-join-order (calculate-join-order flat-pred-clauses)
+        var->pred-clauses (group-by #(or (:predicate %)
+                                         (cond-> (second (:return %))
+                                           (= :collection (first (:return %))) (first)))
+                                    flat-pred-clauses)
+        ;; _ (doseq [var vars-in-join-order
+        ;;           :let [_ (prn var)]
+        ;;           clause (get var->pred-clauses var)]
+        ;;     (clojure.pprint/pprint (s/unform ::pred clause)))
+        vars-in-join-order (filter logic-var? vars-in-join-order)
         var->values-result-index (zipmap vars-in-join-order (range))
         var->bindings (build-pred-return-var-bindings var->values-result-index flat-pred-clauses)
         var->range-constraints (build-var-range-constraints encode-value-fn range-clauses var->bindings)
