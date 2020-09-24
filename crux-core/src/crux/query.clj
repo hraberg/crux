@@ -637,7 +637,7 @@
         literal-preds (for [{:keys [e a v] :as clause} literal-clauses]
                         (cond
                           (and (literal? e) (literal? v))
-                          {:pred {:pred-fn (fn [{:keys [entity-resolver-fn index-snapshot] :as db}]
+                          {:pred {:pred-fn (fn literal-ev-triple [{:keys [entity-resolver-fn index-snapshot] :as db}]
                                              (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
                                                (some->> (db/aev nested-index-snapshot a e v entity-resolver-fn)
                                                         (not-empty)
@@ -647,7 +647,7 @@
                                   :args ['$]}}
 
                           (literal? e)
-                          {:pred {:pred-fn (fn [{:keys [entity-resolver-fn index-snapshot] :as db}]
+                          {:pred {:pred-fn (fn literal-e-triple [{:keys [entity-resolver-fn index-snapshot] :as db}]
                                              (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
                                                (idx/new-index-store-index
                                                 (fn [v]
@@ -656,7 +656,7 @@
                            :return [:collection [v '...]]}
 
                           (literal? v)
-                          {:pred {:pred-fn (fn [{:keys [entity-resolver-fn index-snapshot] :as db}]
+                          {:pred {:pred-fn (fn literal-v-triple [{:keys [entity-resolver-fn index-snapshot] :as db}]
                                              (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
                                                (idx/new-index-store-index
                                                 (fn [e]
@@ -672,14 +672,14 @@
                              (cond
                                (= e var)
                                (if (contains? known-vars v)
-                                 {:pred {:pred-fn (fn [{:keys [entity-resolver-fn index-snapshot] :as db} v]
+                                 {:pred {:pred-fn (fn ave-triple [{:keys [entity-resolver-fn index-snapshot] :as db} v]
                                                     (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
                                                       (idx/new-index-store-index
                                                        (fn [e]
                                                          (db/ave nested-index-snapshot a v e entity-resolver-fn)))))
                                          :args ['$ v]}
                                   :return [:collection [e '...]]}
-                                 {:pred {:pred-fn (fn [{:keys [entity-resolver-fn index-snapshot] :as db}]
+                                 {:pred {:pred-fn (fn ae-triple [{:keys [entity-resolver-fn index-snapshot] :as db}]
                                                     (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
                                                       (idx/new-index-store-index
                                                        (fn [e]
@@ -689,14 +689,14 @@
 
                                (= v var)
                                (if (contains? known-vars e)
-                                 {:pred {:pred-fn (fn [{:keys [entity-resolver-fn index-snapshot] :as db} e]
+                                 {:pred {:pred-fn (fn aev-triple [{:keys [entity-resolver-fn index-snapshot] :as db} e]
                                                     (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
                                                       (idx/new-index-store-index
                                                        (fn [v]
                                                          (db/aev nested-index-snapshot a e v entity-resolver-fn)))))
                                          :args ['$ e]}
                                   :return [:collection [v '...]]}
-                                 {:pred {:pred-fn (fn [{:keys [entity-resolver-fn index-snapshot] :as db}]
+                                 {:pred {:pred-fn (fn av-triple [{:keys [entity-resolver-fn index-snapshot] :as db}]
                                                     (let [nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
                                                       (idx/new-index-store-index
                                                        (fn [v]
@@ -728,7 +728,7 @@
        {:pred {:pred-fn set/union
                :args or-branch-returns}
         :return [:relation [(vec free-vars)]]}
-       {:pred {:pred-fn (fn [& args]
+       {:pred {:pred-fn (fn or-exists-check [& args]
                           (boolean (some not-empty args)))
                :args or-branch-returns}})
      (for [{:keys [where branch-return branch-index] :as or-branch} or-branches]
@@ -823,19 +823,6 @@
    (map-indexed vector in-bindings)))
 
 (defrecord VarBinding [e-var var attr result-index result-name type value?])
-
-(defn- build-var-bindings [var->attr v-var->e e->v-var var->values-result-index max-join-depth vars]
-  (->> (for [var vars
-             :let [e-var (get v-var->e var var)]]
-         [var (map->VarBinding
-               {:e-var e-var
-                :var var
-                :attr (get var->attr var)
-                :result-index (get var->values-result-index var)
-                :result-name e-var
-                :type :entity
-                :value? false})])
-       (into {})))
 
 (defn- value-var-binding [var result-index type]
   (map->VarBinding
@@ -1214,7 +1201,7 @@
               (let [scalar-var (gensym (str "scalar_" return-binding))]
                 [{:pred pred
                   :return [:scalar scalar-var]}
-                 {:pred {:pred-fn (fn [{:keys [index-snapshot] :as db} scalar]
+                 {:pred {:pred-fn (fn scalar->collection [{:keys [index-snapshot] :as db} scalar]
                                     (binding [nippy/*freeze-fallback* :write-unfreezable]
                                       (idx/new-singleton-virtual-index scalar (partial db/encode-value index-snapshot))))
                          :args ['$ scalar-var]}
@@ -1226,7 +1213,7 @@
                        :return [:scalar tuple-var]}
                       (for [[idx var] (map-indexed vector return-binding)]
                         {:pred {:pred-fn
-                                (fn [{:keys [index-snapshot] :as db} tuple idx]
+                                (fn scalar-tuple->collection [{:keys [index-snapshot] :as db} tuple idx]
                                   (binding [nippy/*freeze-fallback* :write-unfreezable]
                                     (idx/new-singleton-virtual-index (nth tuple idx nil) (partial db/encode-value index-snapshot))))
                                 :args ['$ tuple-var idx]}
@@ -1235,14 +1222,14 @@
               :relation
               (let [return-binding (first return-binding)
                     relation-var (gensym (str "relation_" (string/join "_" return-binding)))
-                    reordered-relation-var (gensym (str "re-ordered-relation_" (string/join "_" return-binding)))
+                    reordered-relation-var (gensym (str "reordered-relation_" (string/join "_" return-binding)))
                     tuple-vars-in-join-order (keep (set return-binding) join-order)
                     tuple-idxs-in-join-order (mapv (zipmap return-binding (range))
                                                    tuple-vars-in-join-order)]
                 (concat
                  [{:pred pred
                    :return [:scalar relation-var]}
-                  {:pred {:pred-fn (fn [{:keys [index-snapshot] :as db} relation]
+                  {:pred {:pred-fn (fn scalar-relation->scalar-reordered-relation [{:keys [index-snapshot] :as db} relation]
                                      (binding [nippy/*freeze-fallback* :write-unfreezable]
                                        (->> (for [tuple relation]
                                               (mapv #(db/encode-value index-snapshot (nth tuple % nil)) tuple-idxs-in-join-order))
@@ -1255,7 +1242,7 @@
                  (first
                   (reduce
                    (fn [[acc path] var]
-                     [(conj acc {:pred {:pred-fn (fn [{:keys [index-snapshot] :as db} relation & path]
+                     [(conj acc {:pred {:pred-fn (fn scalar-reordered-relation->collection [{:keys [index-snapshot] :as db} relation & path]
                                                    (let [path (mapv #(db/encode-value index-snapshot %) path)]
                                                      (idx/new-sorted-virtual-index (get-in relation path))))
                                         :args (vec (cons '$ (cons reordered-relation-var path)))}
