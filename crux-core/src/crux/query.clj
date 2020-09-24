@@ -822,21 +822,13 @@
    []
    (map-indexed vector in-bindings)))
 
-(defrecord VarBinding [e-var var attr result-index result-name type value?])
-
-(defn- value-var-binding [var result-index type]
-  (map->VarBinding
-   {:var var
-    :result-name (symbol "crux.query.value" (name var))
-    :result-index result-index
-    :type type
-    :value? true}))
+(defrecord VarBinding [var result-index])
 
 (defn- build-pred-return-var-bindings [var->values-result-index pred-clauses]
   (->> (for [{:keys [return]} pred-clauses
              return-var (find-binding-vars return)
              :let [result-index (get var->values-result-index return-var)]]
-         [return-var (value-var-binding return-var result-index :pred)])
+         [return-var (map->VarBinding {:var return-var :result-index result-index})])
        (into {})))
 
 (defn- calculate-constraint-join-depth [var->bindings vars]
@@ -910,7 +902,7 @@
             (str "Clause refers to unknown variable: "
                  var " " (cio/pr-edn-str clause))))))
 
-(defn- bind-binding [bind-type tuple-idxs-in-join-order idx result]
+(defn- bind-binding [bind-type idx result]
   (case bind-type
     :scalar
     (do (idx/update-relation-virtual-index! idx [[result]])
@@ -928,8 +920,7 @@
 
     result))
 
-(defmethod pred-constraint 'get-attr [_ {:keys [encode-value-fn idx-id arg-bindings
-                                                return-type tuple-idxs-in-join-order] :as pred-ctx}]
+(defmethod pred-constraint 'get-attr [_ {:keys [idx-id arg-bindings return-type] :as pred-ctx}]
   (let [arg-bindings (rest arg-bindings)
         [e-var attr not-found] arg-bindings
         not-found? (= 3 (count arg-bindings))
@@ -943,12 +934,11 @@
           (let [values (if (and (empty? vs) not-found?)
                          [not-found]
                          (mapv #(db/decode-value index-snapshot %) vs))]
-            (bind-binding return-type tuple-idxs-in-join-order (get idx-id->idx idx-id) (not-empty values))))))))
+            (bind-binding return-type (get idx-id->idx idx-id) (not-empty values))))))))
 
 (def ^:private ^:dynamic *recursion-table* {})
 
-(defmethod pred-constraint 'q [_ {:keys [encode-value-fn idx-id arg-bindings rule-name->rules
-                                         return-type tuple-idxs-in-join-order]
+(defmethod pred-constraint 'q [_ {:keys [idx-id arg-bindings rule-name->rules return-type]
                                   :as pred-ctx}]
   (let [query (normalize-query (second arg-bindings))
         {:keys [rule-name branch-index]} (meta query)
@@ -970,7 +960,7 @@
                                         (assoc *recursion-table* cache-key [])
                                         *recursion-table*)]
             (with-open [pred-result (.openQuery ^ICruxDatasource db query (object-array args))]
-              (bind-binding return-type tuple-idxs-in-join-order (get idx-id->idx idx-id) (iterator-seq pred-result)))))))))
+              (bind-binding return-type (get idx-id->idx idx-id) (iterator-seq pred-result)))))))))
 
 (defn- built-in-unification-pred [unifier-fn {:keys [encode-value-fn arg-bindings]}]
   (let [arg-bindings (vec (for [arg-binding (rest arg-bindings)]
@@ -991,8 +981,7 @@
 (defmethod pred-constraint '!= [_ pred-ctx]
   (built-in-unification-pred #(empty? (apply set/intersection %)) pred-ctx))
 
-(defmethod pred-constraint :default [_ {:keys [encode-value-fn idx-id arg-bindings
-                                               return-type tuple-idxs-in-join-order]
+(defmethod pred-constraint :default [_ {:keys [idx-id arg-bindings return-type]
                                         :as pred-ctx}]
   (fn pred-constraint [index-snapshot db idx-id->idx join-keys]
     (let [[pred-fn & args] (for [arg-binding arg-bindings]
@@ -1007,14 +996,7 @@
                                arg-binding))
           pred-result (apply pred-fn args)]
       (binding [nippy/*freeze-fallback* :write-unfreezable]
-        (bind-binding return-type tuple-idxs-in-join-order (get idx-id->idx idx-id) pred-result)))))
-
-(defn- build-tuple-idxs-in-join-order [bind-vars vars-in-join-order]
-  (let [bind-vars->tuple-idx (zipmap bind-vars (range))]
-    (vec (for [var vars-in-join-order
-               :let [idx (get bind-vars->tuple-idx var)]
-               :when idx]
-           idx))))
+        (bind-binding return-type (get idx-id->idx idx-id) pred-result)))))
 
 (defn- build-pred-constraints [rule-name->rules encode-value-fn pred-clause+idx-ids var->bindings vars-in-join-order]
   (for [[{:keys [pred return] :as clause} idx-id] pred-clause+idx-ids
@@ -1027,13 +1009,11 @@
                                (get var->bindings arg)
                                (maybe-unquote arg)))
               return-vars (find-binding-vars return)
-              return-vars-tuple-idxs-in-join-order (build-tuple-idxs-in-join-order return-vars vars-in-join-order)
               return-type (first return)
               pred-ctx {:encode-value-fn encode-value-fn
                         :idx-id idx-id
                         :arg-bindings arg-bindings
                         :return-type return-type
-                        :tuple-idxs-in-join-order return-vars-tuple-idxs-in-join-order
                         :rule-name->rules rule-name->rules}]]
     (do (validate-existing-vars var->bindings clause pred-vars)
         (when-not (distinct-vars? return-vars)
@@ -1150,13 +1130,6 @@
     (if (= new-known-vars known-vars)
       new-known-vars
       (recur new-known-vars pred-clauses))))
-
-(defn- build-v-var->e [triple-clauses var->values-result-index]
-  (->> (for [{:keys [e v] :as clause} triple-clauses
-             :when (logic-var? v)]
-         [v e])
-       (sort-by (comp var->values-result-index second))
-       (into {})))
 
 (defn- expand-leaf-preds [{triple-clauses :triple
                            pred-clauses :pred
