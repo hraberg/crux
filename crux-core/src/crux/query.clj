@@ -257,7 +257,7 @@
             (assoc-in [:q-conformed :args] args)))
       conformed-query)))
 
-(declare open-index-snapshot execute-sub-query compile-find)
+(declare open-index-snapshot prepare-sub-query compile-find)
 
 ;; NOTE: :min-count generates boxed math warnings, so this goes below
 ;; the spec.
@@ -1310,45 +1310,47 @@
                                                     logic-var+range-constraint)))))
     compiled-query))
 
-(defn- execute-sub-query [index-snapshot {:keys [query-cache] :as db} {:keys [where] :as query} stats]
+(defn- prepare-sub-query [{:keys [index-snapshot query-cache] :as db} {:keys [where] :as query} stats]
   (let [encode-value-fn (partial db/encode-value index-snapshot)
         query (select-keys query [:find :where :in :rules :full-results?])
-        {:keys [depth->constraints
-                vars-in-join-order
-                var->range-constraints
-                var->logic-var-range-constraint-fns
-                var->joins
-                var->bindings
-                compiled-find]
-         :as compiled-query} (-> (lru/compute-if-absent
-                                  query-cache
-                                  query
-                                  identity
-                                  (fn [_]
-                                    (compile-sub-query encode-value-fn query stats)))
-                                 (add-logic-var-constraints))
-        idx-id->idx (build-idx-id->idx db index-snapshot compiled-query)
-        unary-join-indexes (for [v vars-in-join-order]
-                             (-> (idx/new-unary-join-virtual-index
-                                  (vec (for [{:keys [id idx-fn] :as join} (get var->joins v)]
-                                         (or (get idx-id->idx id)
-                                             (idx-fn db index-snapshot compiled-query)))))
-                                 (idx/wrap-with-range-constraints (get var->range-constraints v))))
-        constrain-result-fn (fn [join-keys]
-                              (constrain-join-result-by-constraints index-snapshot db idx-id->idx depth->constraints join-keys))
-        var-bindings (mapv :var-binding compiled-find)]
-    (log/debug :where (cio/pr-edn-str where))
-    (log/debug :vars-in-join-order vars-in-join-order)
-    (log/debug :attr-stats (cio/pr-edn-str stats))
-    (log/debug :var->bindings (cio/pr-edn-str var->bindings))
-    {:result-seq (when (constrain-result-fn [])
-                   (let [n-ary-join (-> (idx/new-n-ary-join-layered-virtual-index unary-join-indexes)
-                                        (idx/new-n-ary-constraining-layered-virtual-index constrain-result-fn))]
-                     (for [join-keys (idx/layered-idx->seq n-ary-join)]
+        compiled-query (lru/compute-if-absent
+                        query-cache
+                        query
+                        identity
+                        (fn [_]
+                          (compile-sub-query encode-value-fn query stats)))]
+    {:query-fn (fn [{:keys [index-snapshot] :as db} in-args]
+                 (let [db (assoc db :in-args in-args)
+                       {:keys [depth->constraints
+                               vars-in-join-order
+                               var->range-constraints
+                               var->logic-var-range-constraint-fns
+                               var->joins
+                               var->bindings
+                               compiled-find]
+                        :as compiled-query} (add-logic-var-constraints compiled-query)
+                       idx-id->idx (build-idx-id->idx db index-snapshot compiled-query)
+                       unary-join-indexes (for [v vars-in-join-order]
+                                            (-> (idx/new-unary-join-virtual-index
+                                                 (vec (for [{:keys [id idx-fn] :as join} (get var->joins v)]
+                                                        (or (get idx-id->idx id)
+                                                            (idx-fn db index-snapshot compiled-query)))))
+                                                (idx/wrap-with-range-constraints (get var->range-constraints v))))
+                       constrain-result-fn (fn [join-keys]
+                                             (constrain-join-result-by-constraints index-snapshot db idx-id->idx depth->constraints join-keys))
+                       var-bindings (mapv :var-binding compiled-find)]
+                   (log/debug :where (cio/pr-edn-str where))
+                   (log/debug :vars-in-join-order vars-in-join-order)
+                   (log/debug :attr-stats (cio/pr-edn-str stats))
+                   (log/debug :var->bindings (cio/pr-edn-str var->bindings))
+                   (when (constrain-result-fn [])
+                     (for [join-keys (-> (idx/new-n-ary-join-layered-virtual-index unary-join-indexes)
+                                         (idx/new-n-ary-constraining-layered-virtual-index constrain-result-fn)
+                                         (idx/layered-idx->seq))]
                        (mapv (fn [var-binding]
                                (bound-result-for-var index-snapshot var-binding join-keys))
-                             var-bindings))))
-     :compiled-find compiled-find}))
+                             var-bindings)))))
+     :compiled-find (:compiled-find compiled-query)}))
 
 (defn- open-index-snapshot ^java.io.Closeable [{:keys [index-store index-snapshot] :as db}]
   (if index-snapshot
@@ -1593,7 +1595,7 @@
                                           (assoc :in in)
                                           (dissoc :args))))
     (validate-in in)
-    (let [db (assoc db :index-snapshot index-snapshot :in-args in-args)
+    (let [db (assoc db :index-snapshot index-snapshot)
           entity-resolver-fn (or (:entity-resolver-fn db)
                                  (new-entity-resolver-fn db))
           open-nested-index-snapshot-fn (or (:open-nested-index-snapshot-fn db)
@@ -1602,7 +1604,7 @@
                                                (db/open-nested-index-snapshot index-snapshot))))
           q-conformed (assoc q-conformed :in in)
           db (assoc db :entity-resolver-fn entity-resolver-fn :open-nested-index-snapshot-fn open-nested-index-snapshot-fn)
-          {:keys [result-seq compiled-find] :as built-query} (execute-sub-query index-snapshot db q-conformed stats)
+          {:keys [query-fn compiled-find] :as built-query} (prepare-sub-query db q-conformed stats)
           find-logic-vars (mapv :logic-var compiled-find)
           var-types (set (map :var-type compiled-find))
           aggregate? (contains? var-types :aggregate)
@@ -1618,7 +1620,7 @@
                 (str "Order by requires an element from :find. unreturned element: " find-arg))))
 
       (lazy-seq
-       (cond->> result-seq
+       (cond->> (query-fn db in-args)
 
          aggregate? (aggregate-result compiled-find)
          order-by (cio/external-sort (order-by-comparator find order-by))
