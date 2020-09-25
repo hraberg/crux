@@ -438,7 +438,7 @@
                                       >= <=
                                       = =})
 
-(defn- maybe-unquote [x]
+(defn maybe-unquote [x]
   (if (and (seq? x) (= 'quote (first x)) (= 2 (count x)))
     (recur (second x))
     x))
@@ -845,19 +845,10 @@
    []
    (map-indexed vector in-bindings)))
 
-(defrecord VarBinding [var result-index])
-
-(defn- build-pred-return-var-bindings [var->values-result-index pred-clauses]
-  (->> (for [{:keys [return]} pred-clauses
-             return-var (find-binding-vars return)
-             :let [result-index (get var->values-result-index return-var)]]
-         [return-var (map->VarBinding {:var return-var :result-index result-index})])
-       (into {})))
-
 ;; TODO: Get rid of assumption that value-buffer-type-id is always one
 ;; byte. Or better, move construction or handling of ranges to the
 ;; IndexSnapshot and remove the need for the type-prefix completely.
-(defn- new-range-constraint-wrapper-fn [op ^Box val]
+(defn new-range-constraint-wrapper-fn [op ^Box val]
   (case op
     = #(idx/new-equals-virtual-index % val)
     < #(-> (idx/new-less-than-virtual-index % val)
@@ -1066,12 +1057,12 @@
                   (fn [[acc path] var]
                     [(conj acc {:pred {:pred-fn (fn scalar-reordered-relation->collection [{:keys [index-snapshot] :as db} relation & path]
                                                   (binding [nippy/*freeze-fallback* :write-unfreezable]
-                                                    (let [path (mapv #(db/encode-value index-snapshot %) path)]
+                                                    (let [path (mapv (:encode-value-fn db) path)]
                                                       (idx/new-sorted-virtual-index (get-in relation path)))))
                                        :args (vec (cons '$ (cons reordered-relation-var path)))}
                                 :source `(binding [nippy/*freeze-fallback* :write-unfreezable]
-                                           (let [path# (mapv #(db/encode-value (:index-snapshot ~'$) %) ~path)]
-                                             (idx/new-sorted-virtual-index (get-in ~reordered-relation-var path#))))
+                                           (let [path# (mapv (:encode-value-fn ~'$) ~path)]
+                                             (idx/new-sorted-virtual-index (get-in ~reordered-relation-var path#) )))
                                 :return [:collection [var '...]]})
                      (conj path var)])
                   [[] []]
@@ -1086,22 +1077,12 @@
                                    (if (instance? db/Index collection)
                                      collection
                                      (binding [nippy/*freeze-fallback* :write-unfreezable]
-                                       (let [collection (mapv #(db/encode-value index-snapshot %) collection)]
-                                         (idx/new-sorted-virtual-index (reduce
-                                                                        (fn [acc x]
-                                                                          (idx/tree-map-put-in acc [x] nil))
-                                                                        (TreeMap. mem/buffer-comparator)
-                                                                        collection))))))
+                                       (idx/new-sorted-virtual-index collection (:encode-value-fn db)))))
                         :args ['$ collection-var]}
                  :source `(if (satisfies? db/Index ~collection-var)
                             ~collection-var
                             (binding [nippy/*freeze-fallback* :write-unfreezable]
-                              (let [collection# (mapv #(db/encode-value (:index-snapshot ~'$) %) ~collection-var)]
-                                (idx/new-sorted-virtual-index (reduce
-                                                               (fn [acc# x#]
-                                                                 (idx/tree-map-put-in acc# [x#] nil))
-                                                               (TreeMap. mem/buffer-comparator)
-                                                               collection#)))))
+                              (idx/new-sorted-virtual-index ~collection-var (:encode-value-fn ~'$))))
                  :return return}])
              [(assoc clause :predicate (keyword (gensym (str "predicate_"))))])))
        (reduce into [])))
@@ -1111,7 +1092,7 @@
     (merge (->> (for [[var clauses] (group-by :sym range-clauses)
                       :when (logic-var? var)]
                   [var (for [{:keys [op val sym]} clauses]
-                         `(#'crux.query/new-range-constraint-wrapper-fn '~op (Box. ((:encode-value-fn ~'$) ~val))))])
+                         `(crux.query/new-range-constraint-wrapper-fn '~op (Box. ((:encode-value-fn ~'$) ~val))))])
                 (into {}))
            (->> (for [{:keys [op sym-a sym-b] :as clause} range-clauses
                       :when (and (logic-var? sym-a)
@@ -1124,7 +1105,7 @@
                                  (get range->inverse-range op)
                                  op)]]
                   {second-sym
-                   [`(#'crux.query/new-range-constraint-wrapper-fn '~op (Box. ((:encode-value-fn ~'$) ~first-sym)))]})
+                   [`(crux.query/new-range-constraint-wrapper-fn '~op (Box. ((:encode-value-fn ~'$) ~first-sym)))]})
                 (apply merge-with into {})))))
 
 (defn- codegen-sub-query [flat-pred-clauses range-clauses rules compiled-find vars-in-join-order]
@@ -1156,7 +1137,7 @@
              ~encode-value-fn-sym (:encode-value-fn ~'$)
              ~entity-resolver-fn-sym (:entity-resolver-fn ~'$)
              ~'q (fn [query# & args#]
-                   (let [query# (#'crux.query/maybe-unquote query#)
+                   (let [query# (crux.query/maybe-unquote query#)
                          cache-key# (when-let [rule-name# (:rule-name (meta query#))]
                                       [rule-name# (:branch-index (meta query#)) args#])]
                      (if-let [cached-result# (when cache-key#
@@ -1235,11 +1216,9 @@
         all-vars-in-join-order (calculate-join-order flat-pred-clauses)
         vars-in-join-order (filter logic-var? all-vars-in-join-order)
         var->values-result-index (zipmap vars-in-join-order (range))
-        var->bindings (build-pred-return-var-bindings var->values-result-index flat-pred-clauses)
-        compiled-find (compile-find find var->bindings full-results?)
+        compiled-find (compile-find find (set vars-in-join-order) full-results?)
         query-source (codegen-sub-query flat-pred-clauses range-clauses rules compiled-find all-vars-in-join-order)]
     {:vars-in-join-order vars-in-join-order
-     :var->bindings var->bindings
      :compiled-find compiled-find
      :query-source query-source
      :query-fn (try
@@ -1409,12 +1388,11 @@
     (fn [value db]
       (project-child value root-fns db))))
 
-(defn- compile-find [conformed-find var->bindings full-results?]
+(defn- compile-find [conformed-find known-vars full-results?]
   (let [compiled-find (for [[var-type arg] conformed-find]
                         (case var-type
                           :logic-var {:logic-var arg
                                       :var-type :logic-var
-                                      :var-binding (var->bindings arg)
                                       :->result (if full-results?
                                                   (fn [value {:keys [entity-resolver-fn]}]
                                                     (or (when-let [hash (some-> (entity-resolver-fn (c/->id-buffer value)) (c/new-id))]
@@ -1425,17 +1403,15 @@
                                                     value))}
                           :project {:logic-var (:logic-var arg)
                                     :var-type :project
-                                    :var-binding (var->bindings (:logic-var arg))
                                     :->result (compile-project-spec (s/unform ::eql/query (:project-spec arg)))}
                           :aggregate (do (s/assert ::aggregate-args [(:aggregate-fn arg) (vec (:args arg))])
                                          {:logic-var (:logic-var arg)
                                           :var-type :aggregate
-                                          :var-binding (var->bindings (:logic-var arg))
                                           :aggregate-fn (apply aggregate (:aggregate-fn arg) (:args arg))
                                           :->result (fn [value _]
                                                       value)})))]
-    (doseq [{:keys [logic-var var-binding]} compiled-find
-            :when (nil? var-binding)]
+    (doseq [{:keys [logic-var]} compiled-find
+            :when (not (contains? known-vars logic-var))]
       (throw (IllegalArgumentException.
               (str "Find refers to unknown variable: " logic-var))))
     compiled-find))
