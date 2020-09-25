@@ -877,6 +877,12 @@
            (dep/graph)
            pred-clauses)
         join-order (dep/topo-sort g)]
+    (doseq [{:keys [pred] :as clause} pred-clauses
+            var (cond->> (:args pred)
+                  (not (pred-constraint? (:pred-fn pred))) (cons (:pred-fn pred)))
+            :when (and (logic-var? var)
+                       (empty? (dep/transitive-dependencies g var)))]
+      (throw (IllegalArgumentException. (str "Clause refers to unknown variable: " var " " (cio/pr-edn-str clause)))))
     (vec (remove #{::root} join-order))))
 
 (defn- rule-name->rules [rules]
@@ -1184,6 +1190,11 @@
                       (reduce into []))]
            [~@find-vars])))))
 
+(defn- validate-range-vars [range-vars known-vars]
+  (doseq [var range-vars]
+    (when-not (contains? known-vars var)
+      (throw (IllegalArgumentException. (str "Range constraint refers to unknown variable: " var))))))
+
 (defn- compile-sub-query [encode-value-fn {:keys [find where in rules full-results?]} stats]
   (let [rule-name->rules (rule-name->rules rules)
         rules (s/unform ::rules rules)
@@ -1215,9 +1226,10 @@
         flat-pred-clauses (flatten-pred-clauses pred-clauses (calculate-join-order pred-clauses))
         all-vars-in-join-order (calculate-join-order flat-pred-clauses)
         vars-in-join-order (filter logic-var? all-vars-in-join-order)
-        var->values-result-index (zipmap vars-in-join-order (range))
-        compiled-find (compile-find find (set vars-in-join-order) full-results?)
+        known-vars (set vars-in-join-order)
+        compiled-find (compile-find find known-vars full-results?)
         query-source (codegen-sub-query flat-pred-clauses range-clauses rules compiled-find all-vars-in-join-order)]
+    (validate-range-vars range-vars known-vars)
     {:vars-in-join-order vars-in-join-order
      :compiled-find compiled-find
      :query-source query-source
