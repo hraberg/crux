@@ -990,7 +990,7 @@
                  {:bound-vars [relation-var]
                   :source `(binding [nippy/*freeze-fallback* :write-unfreezable]
                              (->> (for [tuple# ~relation-var]
-                                    (mapv #(db/encode-value (:index-snapshot ~'$) (nth tuple# % nil)) ~tuple-idxs-in-join-order))
+                                    (mapv #((:encode-value-fn ~'$) (nth tuple# % nil)) ~tuple-idxs-in-join-order))
                                   (reduce
                                    (fn [acc# tuple#]
                                      (idx/tree-map-put-in acc# tuple# nil))
