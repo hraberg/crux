@@ -1165,7 +1165,7 @@
                        (let [~'$ (if cache-key#
                                    (assoc-in ~'$ [:recursion-table* cache-key#] [])
                                    ~'$)]
-                         (with-open [xs# ^java.io.Closeable (apply api/open-q ~'$ query# args#)]
+                         (with-open [xs# ^java.io.Closeable (api/open-q* ~'$ query# args#)]
                            (not-empty (vec (iterator-seq xs#))))))))
              ~'get-attr (fn
                           ([e# a#]
