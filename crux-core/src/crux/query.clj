@@ -819,17 +819,20 @@
 
 (defn- calculate-join-order [pred-clauses]
   (let [g (reduce
-           (fn [g {:keys [bound-vars return predicate] :as pred-clause}]
-             (->> (for [bound-var (cons ::root bound-vars)
-                        :when (or predicate return)
-                        return-var (if predicate
-                                     [predicate]
-                                     (find-binding-vars return))]
-                    [return-var bound-var])
-                  (reduce
-                   (fn [g [r a]]
-                     (dep/depend g r a))
-                   g)))
+           (fn [g {:keys [pred bound-vars return predicate] :as pred-clause}]
+             (let [bound-vars (if bound-vars
+                                bound-vars
+                                (remove pred-constraint? (filter logic-var? (cons (:pred-fn pred) (:args pred)))))]
+               (->> (for [bound-var (cons ::root bound-vars)
+                          :when (or predicate return)
+                          return-var (if predicate
+                                       [predicate]
+                                       (find-binding-vars return))]
+                      [return-var bound-var])
+                    (reduce
+                     (fn [g [r a]]
+                       (dep/depend g r a))
+                     g))))
            (dep/graph)
            pred-clauses)
         join-order (dep/topo-sort g)]
@@ -1012,7 +1015,7 @@
                    collection-var (gensym (str "collection_" return-binding "_"))]
                [(assoc flat-pred :return [:scalar collection-var])
                 {:bound-vars [collection-var]
-                 :source `(if (satisfies? db/Index ~collection-var)
+                 :source `(if (instance? crux.db.Index ~collection-var)
                             ~collection-var
                             (binding [nippy/*freeze-fallback* :write-unfreezable]
                               (idx/new-sorted-virtual-index ~collection-var (:encode-value-fn ~'$))))
