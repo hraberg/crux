@@ -20,7 +20,7 @@
             [edn-query-language.core :as eql]
             [clojure.string :as string]
             [crux.system :as sys])
-  (:import [clojure.lang Box ExceptionInfo MapEntry]
+  (:import [clojure.lang ExceptionInfo MapEntry]
            (crux.api ICruxDatasource HistoryOptions HistoryOptions$SortOrder NodeOutOfSyncException)
            crux.codec.EntityTx
            crux.index.IndexStoreIndexState
@@ -848,7 +848,7 @@
 ;; TODO: Get rid of assumption that value-buffer-type-id is always one
 ;; byte. Or better, move construction or handling of ranges to the
 ;; IndexSnapshot and remove the need for the type-prefix completely.
-(defn new-range-constraint-wrapper-fn [op ^Box val]
+(defn new-range-constraint-wrapper-fn [op val]
   (case op
     = #(idx/new-equals-virtual-index % val)
     < #(-> (idx/new-less-than-virtual-index % val)
@@ -1098,7 +1098,7 @@
     (merge (->> (for [[var clauses] (group-by :sym range-clauses)
                       :when (logic-var? var)]
                   [var (for [{:keys [op val sym]} clauses]
-                         `(crux.query/new-range-constraint-wrapper-fn '~op (Box. ((:encode-value-fn ~'$) ~val))))])
+                         `(crux.query/new-range-constraint-wrapper-fn '~op ((:encode-value-fn ~'$) ~val)))])
                 (into {}))
            (->> (for [{:keys [op sym-a sym-b] :as clause} range-clauses
                       :when (and (logic-var? sym-a)
@@ -1111,7 +1111,7 @@
                                  (get range->inverse-range op)
                                  op)]]
                   {second-sym
-                   [`(crux.query/new-range-constraint-wrapper-fn '~op (Box. ((:encode-value-fn ~'$) ~first-sym)))]})
+                   [`(crux.query/new-range-constraint-wrapper-fn '~op ((:encode-value-fn ~'$) ~first-sym))]})
                 (apply merge-with into {})))))
 
 (defn- codegen-sub-query [flat-pred-clauses range-clauses rules compiled-find vars-in-join-order]
