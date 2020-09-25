@@ -1015,22 +1015,23 @@
                                                  :where [[i :name n]
                                                          [(!= i :petr)]]}))))
 
-  (t/testing "multiple literals in set"
-    (t/is (= #{[:petr] [:ivan]} (api/q (api/db *api*) '{:find [p]
-                                                        :where [[p :name n]
-                                                                [(== n #{"Petr" "Ivan"})]]})))
+  ;; NOTE: removing support for this for now.
+  #_(t/testing "multiple literals in set"
+      (t/is (= #{[:petr] [:ivan]} (api/q (api/db *api*) '{:find [p]
+                                                          :where [[p :name n]
+                                                                  [(== n #{"Petr" "Ivan"})]]})))
 
-    (t/is (= #{[:ivan]} (api/q (api/db *api*) '{:find [p]
-                                                :where [[p :name n]
-                                                        [(!= n #{"Petr"})]]})))
+      (t/is (= #{[:ivan]} (api/q (api/db *api*) '{:find [p]
+                                                  :where [[p :name n]
+                                                          [(!= n #{"Petr"})]]})))
 
-    (t/is (= #{} (api/q (api/db *api*) '{:find [p]
-                                         :where [[p :name n]
-                                                 [(== n #{})]]})))
+      (t/is (= #{} (api/q (api/db *api*) '{:find [p]
+                                           :where [[p :name n]
+                                                   [(== n #{})]]})))
 
-    (t/is (= #{[:petr] [:ivan]} (api/q (api/db *api*) '{:find [p]
-                                                        :where [[p :name n]
-                                                                [(!= n #{})]]})))))
+      (t/is (= #{[:petr] [:ivan]} (api/q (api/db *api*) '{:find [p]
+                                                          :where [[p :name n]
+                                                                  [(!= n #{})]]})))))
 
 (t/deftest test-get-attr
   (fix/transact! *api* (fix/people [{:crux.db/id :ivan :name "Ivan" :age 21 :friends #{:petr :oleg}}]))
