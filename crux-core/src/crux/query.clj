@@ -1002,7 +1002,7 @@
                     [(conj acc {:bound-vars (vec (cons reordered-relation-var path))
                                 :source `(binding [nippy/*freeze-fallback* :write-unfreezable]
                                            (let [path# (mapv (:encode-value-fn ~'$) ~path)]
-                                             (idx/new-sorted-virtual-index (get-in ~reordered-relation-var path#) )))
+                                             (idx/new-sorted-virtual-index (get-in ~reordered-relation-var path#))))
                                 :return [:collection [var '...]]})
                      (conj path var)])
                   [[] []]
