@@ -1156,8 +1156,10 @@
      :query-fn (try
                  (eval query-source)
                  (catch Exception e
-                   (clojure.pprint/pprint query-source)
-                   (.printStackTrace e)
+                   (log/error e
+                              "Failed to compile query:"
+                              (with-out-str
+                                (clojure.pprint/pprint query-source)))
                    (throw e)))}))
 
 (defn- prepare-sub-query [{:keys [index-snapshot query-cache] :as db} query stats]
