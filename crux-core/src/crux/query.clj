@@ -607,7 +607,7 @@
   (let [snapshot-id (gensym "snapshot-id_")]
     (cond
       (and (literal? e) (literal? v))
-      {:pred {:args ['$ a e v]}
+      {:bound-vars []
        :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (some->> (db/aev nested-index-snapshot# ~a ~e ~v (:entity-resolver-fn ~'$))
                            (not-empty)
@@ -616,7 +616,7 @@
                            (= ~v)))}
 
       (literal? e)
-      {:pred {:args ['$ a e]}
+      {:bound-vars []
        :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [v#]
@@ -624,7 +624,7 @@
        :return [:collection [v '...]]}
 
       (literal? v)
-      {:pred {:args ['$ a v]}
+      {:bound-vars []
        :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [e#]
@@ -636,13 +636,13 @@
    (cond
      (= e var)
      (if (contains? known-vars v)
-       {:pred {:args ['$ a v]}
+       {:bound-vars [v]
         :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [e#]
                      (db/ave nested-index-snapshot# ~a ~v e# (:entity-resolver-fn ~'$)))))
         :return [:collection [e '...]]}
-       {:pred {:args ['$ a]}
+       {:bound-vars []
         :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [e#]
@@ -651,13 +651,13 @@
 
      (= v var)
      (if (contains? known-vars e)
-       {:pred {:args ['$ a e]}
+       {:bound-vars [e]
         :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [v#]
                      (db/aev nested-index-snapshot# ~a ~e v# (:entity-resolver-fn ~'$)))))
         :return [:collection [v '...]]}
-       {:pred {:args ['$ a]}
+       {:bound-vars []
         :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [v#]
@@ -701,10 +701,10 @@
         {:keys [rule-name]} (meta clause)]
     (cons
      (if has-free-vars?
-       {:pred {:args or-branch-returns}
+       {:bound-vars or-branch-returns
         :source `(set/union ~@or-branch-returns)
         :return [:relation [(vec free-vars)]]}
-       {:pred {:args or-branch-returns}
+       {:bound-vars or-branch-returns
         :source `(boolean (some not-empty ~or-branch-returns))})
      (for [{:keys [where branch-return branch-index] :as or-branch} or-branches]
        {:pred
@@ -788,7 +788,7 @@
                                       :limit 1}
                                      not-vars))}
                    :return [:scalar not-return]}
-                  {:pred {:args [not-return]}
+                  {:bound-vars [not-return]
                    :source `(empty? ~not-return)}])))
    []
    not-clauses))
@@ -796,8 +796,7 @@
 (defn- in-pred-clauses [in-bindings]
   (reduce
    (fn [acc [n in-binding]]
-     (conj acc {:pred
-                {:args ['$ [:in-args n]]}
+     (conj acc {:bound-vars []
                 :source `(get-in ~'$ [:in-args ~n])
                 :return in-binding}))
    []
@@ -950,12 +949,13 @@
            :pred (vec (concat pred-clauses leaf-preds)))))
 
 (defn- flatten-pred-clauses [pred-clauses join-order]
-  (->> (for [{:keys [return pred source] :as clause} pred-clauses
+  (->> (for [{:keys [return pred bound-vars source] :as clause} pred-clauses
              :let [[return-type return-binding] return
                    return-vars (find-binding-vars return-binding)
-                   flat-pred {:bound-vars (vec (remove pred-constraint?
-                                                       (filter logic-var? (cons (:pred-fn pred)
-                                                                                (:args pred)))))
+                   flat-pred {:bound-vars (or bound-vars
+                                              (vec (remove pred-constraint?
+                                                           (filter logic-var? (cons (:pred-fn pred)
+                                                                                    (:args pred))))))
                               :source (or source (first (s/unform ::pred clause)))}]]
          (if-not (distinct-vars? return-vars)
            (throw (IllegalArgumentException.
