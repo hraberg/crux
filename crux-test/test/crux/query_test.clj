@@ -3445,7 +3445,6 @@
            (->> (q/query-plan-for {:find '[e]
                                    :where '[[e :foo/id m]]
                                    :args [{'m 1}]}
-                                  c/->value-buffer
                                   {})
                 :vars-in-join-order
                 (filter #{'m 'e})))))

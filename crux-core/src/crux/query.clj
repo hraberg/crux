@@ -488,8 +488,7 @@
                                                             (= :val-sym order) (update :op range->inverse-range))]
                       (if (and (not= :sym-sym order)
                                (not (logic-var? sym)))
-                        {:pred [{:pred {:pred-fn (get pred->built-in-range-pred (var-get (resolve op)))
-                                        :args [sym val]}
+                        {:pred [{:pred {:args [sym val]}
                                  :source `(~(get pred->built-in-range-pred-source (var-get (resolve op))) ~sym ~val)}]}
                         {:range [clause]}))
 
@@ -608,14 +607,7 @@
   (let [snapshot-id (gensym "snapshot-id_")]
     (cond
       (and (literal? e) (literal? v))
-      {:pred {:pred-fn (fn literal-ev-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} a e v]
-                         (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                           (some->> (db/aev nested-index-snapshot a e v entity-resolver-fn)
-                                    (not-empty)
-                                    (first)
-                                    (db/decode-value nested-index-snapshot)
-                                    (= v))))
-              :args ['$ a e v]}
+      {:pred {:args ['$ a e v]}
        :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (some->> (db/aev nested-index-snapshot# ~a ~e ~v (:entity-resolver-fn ~'$))
                            (not-empty)
@@ -624,12 +616,7 @@
                            (= ~v)))}
 
       (literal? e)
-      {:pred {:pred-fn (fn literal-e-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} a e]
-                         (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                           (idx/new-index-store-index
-                            (fn [v]
-                              (db/aev nested-index-snapshot a e v entity-resolver-fn)))))
-              :args ['$ a e]}
+      {:pred {:args ['$ a e]}
        :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [v#]
@@ -637,12 +624,7 @@
        :return [:collection [v '...]]}
 
       (literal? v)
-      {:pred {:pred-fn (fn literal-v-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} a v]
-                         (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                           (idx/new-index-store-index
-                            (fn [e]
-                              (db/ave nested-index-snapshot a v e entity-resolver-fn)))))
-              :args ['$ a v]}
+      {:pred {:args ['$ a v]}
        :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [e#]
@@ -654,23 +636,13 @@
    (cond
      (= e var)
      (if (contains? known-vars v)
-       {:pred {:pred-fn (fn ave-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} a v]
-                          (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                            (idx/new-index-store-index
-                             (fn [e]
-                               (db/ave nested-index-snapshot a v e entity-resolver-fn)))))
-               :args ['$ a v]}
+       {:pred {:args ['$ a v]}
         :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [e#]
                      (db/ave nested-index-snapshot# ~a ~v e# (:entity-resolver-fn ~'$)))))
         :return [:collection [e '...]]}
-       {:pred {:pred-fn (fn ae-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} a]
-                          (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                            (idx/new-index-store-index
-                             (fn [e]
-                               (db/ae nested-index-snapshot a e entity-resolver-fn)))))
-               :args ['$ a]}
+       {:pred {:args ['$ a]}
         :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [e#]
@@ -679,23 +651,13 @@
 
      (= v var)
      (if (contains? known-vars e)
-       {:pred {:pred-fn (fn aev-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} a e]
-                          (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                            (idx/new-index-store-index
-                             (fn [v]
-                               (db/aev nested-index-snapshot a e v entity-resolver-fn)))))
-               :args ['$ a e]}
+       {:pred {:args ['$ a e]}
         :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [v#]
                      (db/aev nested-index-snapshot# ~a ~e v# (:entity-resolver-fn ~'$)))))
         :return [:collection [v '...]]}
-       {:pred {:pred-fn (fn av-triple [{:keys [entity-resolver-fn open-nested-index-snapshot-fn] :as db} a]
-                          (let [nested-index-snapshot (open-nested-index-snapshot-fn snapshot-id)]
-                            (idx/new-index-store-index
-                             (fn [v]
-                               (db/av nested-index-snapshot a v entity-resolver-fn)))))
-               :args ['$ a]}
+       {:pred {:args ['$ a]}
         :source `(let [nested-index-snapshot# ((:open-nested-index-snapshot-fn ~'$) '~snapshot-id)]
                   (idx/new-index-store-index
                    (fn [v#]
@@ -739,13 +701,10 @@
         {:keys [rule-name]} (meta clause)]
     (cons
      (if has-free-vars?
-       {:pred {:pred-fn set/union
-               :args or-branch-returns}
+       {:pred {:args or-branch-returns}
         :source `(set/union ~@or-branch-returns)
         :return [:relation [(vec free-vars)]]}
-       {:pred {:pred-fn (fn or-exists-check [& args]
-                          (boolean (some not-empty args)))
-               :args or-branch-returns}
+       {:pred {:args or-branch-returns}
         :source `(boolean (some not-empty ~or-branch-returns))})
      (for [{:keys [where branch-return branch-index] :as or-branch} or-branches]
        {:pred
@@ -829,7 +788,7 @@
                                       :limit 1}
                                      not-vars))}
                    :return [:scalar not-return]}
-                  {:pred {:pred-fn empty? :args [not-return]}
+                  {:pred {:args [not-return]}
                    :source `(empty? ~not-return)}])))
    []
    not-clauses))
@@ -838,8 +797,7 @@
   (reduce
    (fn [acc [n in-binding]]
      (conj acc {:pred
-                {:pred-fn get-in
-                 :args ['$ [:in-args n]]}
+                {:args ['$ [:in-args n]]}
                 :source `(get-in ~'$ [:in-args ~n])
                 :return in-binding}))
    []
@@ -997,35 +955,28 @@
 (defn- flatten-pred-clauses [pred-clauses join-order]
   (->> (for [{:keys [return pred source] :as clause} pred-clauses
              :let [[return-type return-binding] return
-                   return-vars (find-binding-vars return-binding)]]
+                   return-vars (find-binding-vars return-binding)
+                   flat-pred {:pred (select-keys pred (if (logic-var? (:pred-fn pred))
+                                                        [:pred-fn :args]
+                                                        [:args]))
+                              :source (or source (first (s/unform ::pred clause)))}]]
          (if-not (distinct-vars? return-vars)
            (throw (IllegalArgumentException.
                    (str "Return variables not distinct: " (cio/pr-edn-str clause))))
            (case return-type
              :scalar
              (let [scalar-var (gensym (str "scalar_" return-binding "_"))]
-               [{:pred pred
-                 :source source
-                 :return [:scalar scalar-var]}
-                {:pred {:pred-fn (fn scalar->collection [{:keys [index-snapshot] :as db} scalar]
-                                   (binding [nippy/*freeze-fallback* :write-unfreezable]
-                                     (idx/new-singleton-virtual-index scalar (partial db/encode-value index-snapshot))))
-                        :args ['$ scalar-var]}
+               [(assoc flat-pred :return [:scalar scalar-var])
+                {:pred {:args ['$ scalar-var]}
                  :source `(binding [nippy/*freeze-fallback* :write-unfreezable]
                             (idx/new-singleton-virtual-index ~scalar-var (:encode-value-fn ~'$)))
                  :return [:collection [return-binding '...]]}])
 
              :tuple
              (let [tuple-var (gensym (str "tuple_" (string/join "_" return-binding) "_"))]
-               (cons {:pred pred
-                      :source source
-                      :return [:scalar tuple-var]}
+               (cons (assoc flat-pred :return [:scalar tuple-var])
                      (for [[idx var] (map-indexed vector return-binding)]
-                       {:pred {:pred-fn
-                               (fn scalar-tuple->collection [{:keys [index-snapshot] :as db} tuple idx]
-                                 (binding [nippy/*freeze-fallback* :write-unfreezable]
-                                   (idx/new-singleton-virtual-index (nth tuple idx nil) (partial db/encode-value index-snapshot))))
-                               :args ['$ tuple-var idx]}
+                       {:pred {:args ['$ tuple-var idx]}
                         :source `(binding [nippy/*freeze-fallback* :write-unfreezable]
                                    (idx/new-singleton-virtual-index (nth ~tuple-var ~idx nil) (:encode-value-fn ~'$)))
                         :return [:collection [var '...]]})))
@@ -1038,18 +989,8 @@
                    tuple-idxs-in-join-order (mapv (zipmap return-binding (range))
                                                   tuple-vars-in-join-order)]
                (concat
-                [{:pred pred
-                  :source source
-                  :return [:scalar relation-var]}
-                 {:pred {:pred-fn (fn scalar-relation->scalar-reordered-relation [{:keys [index-snapshot] :as db} relation]
-                                    (binding [nippy/*freeze-fallback* :write-unfreezable]
-                                      (->> (for [tuple relation]
-                                             (mapv #(db/encode-value index-snapshot (nth tuple % nil)) tuple-idxs-in-join-order))
-                                           (reduce
-                                            (fn [acc tuple]
-                                              (idx/tree-map-put-in acc tuple nil))
-                                            (TreeMap. mem/buffer-comparator)))))
-                         :args ['$ relation-var]}
+                [(assoc flat-pred :return [:scalar relation-var])
+                 {:pred {:args ['$ relation-var]}
                   :source `(binding [nippy/*freeze-fallback* :write-unfreezable]
                              (->> (for [tuple# ~relation-var]
                                     (mapv #(db/encode-value (:index-snapshot ~'$) (nth tuple# % nil)) ~tuple-idxs-in-join-order))
@@ -1061,11 +1002,7 @@
                 (first
                  (reduce
                   (fn [[acc path] var]
-                    [(conj acc {:pred {:pred-fn (fn scalar-reordered-relation->collection [{:keys [index-snapshot] :as db} relation & path]
-                                                  (binding [nippy/*freeze-fallback* :write-unfreezable]
-                                                    (let [path (mapv (:encode-value-fn db) path)]
-                                                      (idx/new-sorted-virtual-index (get-in relation path)))))
-                                       :args (vec (cons '$ (cons reordered-relation-var path)))}
+                    [(conj acc {:pred {:args (vec (cons '$ (cons reordered-relation-var path)))}
                                 :source `(binding [nippy/*freeze-fallback* :write-unfreezable]
                                            (let [path# (mapv (:encode-value-fn ~'$) ~path)]
                                              (idx/new-sorted-virtual-index (get-in ~reordered-relation-var path#) )))
@@ -1076,21 +1013,14 @@
              :collection
              (let [return-binding (first return-binding)
                    collection-var (gensym (str "collection_" return-binding "_"))]
-               [{:pred pred
-                 :source source
-                 :return [:scalar collection-var]}
-                {:pred {:pred-fn (fn scalar-reordered-relation->collection [{:keys [index-snapshot] :as db} collection]
-                                   (if (instance? db/Index collection)
-                                     collection
-                                     (binding [nippy/*freeze-fallback* :write-unfreezable]
-                                       (idx/new-sorted-virtual-index collection (:encode-value-fn db)))))
-                        :args ['$ collection-var]}
+               [(assoc flat-pred :return [:scalar collection-var])
+                {:pred {:args ['$ collection-var]}
                  :source `(if (satisfies? db/Index ~collection-var)
                             ~collection-var
                             (binding [nippy/*freeze-fallback* :write-unfreezable]
                               (idx/new-sorted-virtual-index ~collection-var (:encode-value-fn ~'$))))
                  :return return}])
-             [(assoc clause :predicate (keyword (gensym (str "predicate_"))))])))
+             [(assoc flat-pred :predicate (keyword (gensym (str "predicate_"))))])))
        (reduce into [])))
 
 (defn- build-var-range-constraint-sources [range-clauses vars-in-join-order]
@@ -1122,21 +1052,18 @@
         var->range-constraint-sources (build-var-range-constraint-sources range-clauses vars-in-join-order)
         find-vars (mapv :logic-var compiled-find)
         in-args-sym (gensym "in-args")
-        var->range-constraints-sym (gensym "var->range-constraints")
         index-snapshot-sym (gensym "index-snapshot")
         encode-value-fn-sym (gensym "encode-value-fn")
         entity-resolver-fn-sym (gensym "entity-resolver-fn")
-        clause->source (fn [clause return-type]
-                         (or (:source clause)
-                             (let [source (first (s/unform ::pred clause))]
-                               (if (= 'q (first source))
-                                 (let [[_ q & args] source
-                                       q (normalize-query (maybe-unquote q))
-                                       q (cond-> q
-                                           (seq rules) (update :rules (comp vec concat) rules)
-                                           (= :predicate return-type) (assoc :limit 1))]
-                                   (cons 'q (cons (list 'quote q) args)))
-                                 source))))]
+        clause->source (fn [{:keys [source] :as clause} return-type]
+                         (if (= 'q (first source))
+                           (let [[_ q & args] source
+                                 q (normalize-query (maybe-unquote q))
+                                 q (cond-> q
+                                     (seq rules) (update :rules (comp vec concat) rules)
+                                     (= :predicate return-type) (assoc :limit 1))]
+                             (cons 'q (cons (list 'quote q) args)))
+                           source))]
     `(fn [~'$ ~in-args-sym]
        (let [~'$ (assoc ~'$ :in-args ~in-args-sym :encode-value-fn (partial db/encode-value (:index-snapshot ~'$)))
              ~index-snapshot-sym (:index-snapshot ~'$)
@@ -1171,22 +1098,18 @@
                                   return-type (first (:return (first clauses)))]]
                         (case return-type
                           :scalar
-                          (->> (for [clause clauses]
-                                 `[:let [~(second (:return clause))
-                                         ~(clause->source clause :scalar)]])
-                               (reduce into []))
+                          `[:let ~@(for [clause clauses]
+                                     [var (clause->source clause :scalar)])]
                           :collection
-                          (let [var (first (second (:return (first clauses))))]
-                            `[~var
-                              (idx/idx->seq
-                               (idx/wrap-with-range-constraints
-                                (idx/new-unary-join-virtual-index
-                                 [~@(map #(clause->source % :collection) clauses)])
-                                (comp ~@(get var->range-constraint-sources var))))
-                              :let [~var (db/decode-value ~index-snapshot-sym ~var)]])
-                          (->> (for [clause clauses]
-                                 `[:when ~(clause->source clause :predicate)])
-                               (reduce into []))))
+                          `[~var (idx/idx->seq
+                                  (idx/wrap-with-range-constraints
+                                   (idx/new-unary-join-virtual-index
+                                    [~@(map #(clause->source % :collection) clauses)])
+                                   ~(when-let [cs (get var->range-constraint-sources var)]
+                                      `(comp ~@cs))))
+                            :let [~var (db/decode-value ~index-snapshot-sym ~var)]]
+                          `[:when (and ~@(for [clause clauses]
+                                           (clause->source clause :predicate)))]))
                       (reduce into []))]
            [~@find-vars])))))
 
@@ -1195,7 +1118,7 @@
     (when-not (contains? known-vars var)
       (throw (IllegalArgumentException. (str "Range constraint refers to unknown variable: " var))))))
 
-(defn- compile-sub-query [encode-value-fn {:keys [find where in rules full-results?]} stats]
+(defn- compile-sub-query [{:keys [find where in rules full-results?]} stats]
   (let [rule-name->rules (rule-name->rules rules)
         rules (s/unform ::rules rules)
         where (expand-rules where rule-name->rules {})
@@ -1240,15 +1163,14 @@
                    (.printStackTrace e)
                    (throw e)))}))
 
-(defn- prepare-sub-query [{:keys [index-snapshot query-cache] :as db} {:keys [where] :as query} stats]
-  (let [encode-value-fn (partial db/encode-value index-snapshot)
-        query (select-keys query [:find :where :in :rules :full-results?])
+(defn- prepare-sub-query [{:keys [index-snapshot query-cache] :as db} query stats]
+  (let [query (select-keys query [:find :where :in :rules :full-results?])
         compiled-query (lru/compute-if-absent
                         query-cache
                         query
                         identity
                         (fn [_]
-                          (compile-sub-query encode-value-fn query stats)))]
+                          (compile-sub-query query stats)))]
     (select-keys compiled-query [:query-fn :compiled-find])))
 
 (defn- open-index-snapshot ^java.io.Closeable [{:keys [index-store index-snapshot] :as db}]
@@ -1480,11 +1402,11 @@
                   in-args))])
     [in in-args]))
 
-(defn query-plan-for [q encode-value-fn stats]
+(defn query-plan-for [q stats]
   (s/assert ::query q)
   (let [{:keys [where in rules] :as conformed-q} (s/conform ::query q)
         [in in-args] (add-legacy-args q [])]
-    (compile-sub-query encode-value-fn (assoc conformed-q :in in) stats)))
+    (compile-sub-query (assoc conformed-q :in in) stats)))
 
 (defn query [{:keys [valid-time transact-time document-store index-store index-snapshot] :as db} ^ConformedQuery conformed-q in-args]
   (let [q (.q-normalized conformed-q)
