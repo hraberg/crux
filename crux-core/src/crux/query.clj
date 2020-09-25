@@ -820,26 +820,23 @@
 
 (defn- calculate-join-order [pred-clauses]
   (let [g (reduce
-           (fn [g {:keys [pred return predicate] :as pred-clause}]
-             (let [pred-vars (filter logic-var? (cons (:pred-fn pred) (:args pred)))]
-               (->> (for [pred-var (cons ::root pred-vars)
-                          :when (or predicate return)
-                          return-var (if predicate
-                                       [predicate]
-                                       (find-binding-vars return))]
-                      [return-var pred-var])
-                    (reduce
-                     (fn [g [r a]]
-                       (dep/depend g r a))
-                     g))))
+           (fn [g {:keys [bound-vars return predicate] :as pred-clause}]
+             (->> (for [bound-var (cons ::root bound-vars)
+                        :when (or predicate return)
+                        return-var (if predicate
+                                     [predicate]
+                                     (find-binding-vars return))]
+                    [return-var bound-var])
+                  (reduce
+                   (fn [g [r a]]
+                     (dep/depend g r a))
+                   g)))
            (dep/graph)
            pred-clauses)
         join-order (dep/topo-sort g)]
-    (doseq [{:keys [pred] :as clause} pred-clauses
-            var (cond->> (:args pred)
-                  (not (pred-constraint? (:pred-fn pred))) (cons (:pred-fn pred)))
-            :when (and (logic-var? var)
-                       (empty? (dep/transitive-dependencies g var)))]
+    (doseq [{:keys [bound-vars] :as clause} pred-clauses
+            var bound-vars
+            :when (empty? (dep/transitive-dependencies g var))]
       (throw (IllegalArgumentException. (str "Clause refers to unknown variable: " var " " (cio/pr-edn-str clause)))))
     (vec (remove #{::root} join-order))))
 
@@ -956,9 +953,9 @@
   (->> (for [{:keys [return pred source] :as clause} pred-clauses
              :let [[return-type return-binding] return
                    return-vars (find-binding-vars return-binding)
-                   flat-pred {:pred (select-keys pred (if (logic-var? (:pred-fn pred))
-                                                        [:pred-fn :args]
-                                                        [:args]))
+                   flat-pred {:bound-vars (vec (remove pred-constraint?
+                                                       (filter logic-var? (cons (:pred-fn pred)
+                                                                                (:args pred)))))
                               :source (or source (first (s/unform ::pred clause)))}]]
          (if-not (distinct-vars? return-vars)
            (throw (IllegalArgumentException.
@@ -967,7 +964,7 @@
              :scalar
              (let [scalar-var (gensym (str "scalar_" return-binding "_"))]
                [(assoc flat-pred :return [:scalar scalar-var])
-                {:pred {:args ['$ scalar-var]}
+                {:bound-vars [scalar-var]
                  :source `(binding [nippy/*freeze-fallback* :write-unfreezable]
                             (idx/new-singleton-virtual-index ~scalar-var (:encode-value-fn ~'$)))
                  :return [:collection [return-binding '...]]}])
@@ -976,7 +973,7 @@
              (let [tuple-var (gensym (str "tuple_" (string/join "_" return-binding) "_"))]
                (cons (assoc flat-pred :return [:scalar tuple-var])
                      (for [[idx var] (map-indexed vector return-binding)]
-                       {:pred {:args ['$ tuple-var idx]}
+                       {:bound-vars [tuple-var]
                         :source `(binding [nippy/*freeze-fallback* :write-unfreezable]
                                    (idx/new-singleton-virtual-index (nth ~tuple-var ~idx nil) (:encode-value-fn ~'$)))
                         :return [:collection [var '...]]})))
@@ -990,7 +987,7 @@
                                                   tuple-vars-in-join-order)]
                (concat
                 [(assoc flat-pred :return [:scalar relation-var])
-                 {:pred {:args ['$ relation-var]}
+                 {:bound-vars [relation-var]
                   :source `(binding [nippy/*freeze-fallback* :write-unfreezable]
                              (->> (for [tuple# ~relation-var]
                                     (mapv #(db/encode-value (:index-snapshot ~'$) (nth tuple# % nil)) ~tuple-idxs-in-join-order))
@@ -1002,7 +999,7 @@
                 (first
                  (reduce
                   (fn [[acc path] var]
-                    [(conj acc {:pred {:args (vec (cons '$ (cons reordered-relation-var path)))}
+                    [(conj acc {:bound-vars (vec (cons reordered-relation-var path))
                                 :source `(binding [nippy/*freeze-fallback* :write-unfreezable]
                                            (let [path# (mapv (:encode-value-fn ~'$) ~path)]
                                              (idx/new-sorted-virtual-index (get-in ~reordered-relation-var path#) )))
@@ -1014,7 +1011,7 @@
              (let [return-binding (first return-binding)
                    collection-var (gensym (str "collection_" return-binding "_"))]
                [(assoc flat-pred :return [:scalar collection-var])
-                {:pred {:args ['$ collection-var]}
+                {:bound-vars [collection-var]
                  :source `(if (satisfies? db/Index ~collection-var)
                             ~collection-var
                             (binding [nippy/*freeze-fallback* :write-unfreezable]
