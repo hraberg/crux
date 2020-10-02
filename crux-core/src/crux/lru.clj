@@ -102,7 +102,14 @@
 (defn new-second-chance-cache [^long size]
   (let [hot (ConcurrentHashMap. size)
         cold-factor 0.1
-        cold (ArrayDeque. (long (Math/ceil (* cold-factor size))))]
+        cold (ArrayDeque. (long (Math/ceil (* cold-factor size))))
+        move-to-cold #(let [cold-target-size (long (Math/ceil (* cold-factor (.size hot))))]
+                        (while (< (.size cold) cold-target-size)
+                          (let [e (random-entry hot)]
+                            (when-let [vp ^objects (.getValue e)]
+                              (when (nil? (aget vp 1))
+                                (aset vp 1 (.getKey e))
+                                (.push cold vp))))))]
     (reify
       Object
       (toString [_]
@@ -110,31 +117,24 @@
 
       LRUCache
       (compute-if-absent [_ k stored-key-fn f]
-        (let [vp ^objects (.getOrDefault hot k ::not-found)]
-          (if (= ::not-found vp)
-            (let [k (stored-key-fn k)
-                  move-to-cold #(let [cold-target-size (long (Math/ceil (* cold-factor (.size hot))))]
-                                  (while (< (.size cold) cold-target-size)
-                                    (let [e (random-entry hot)]
-                                      (when-let [vp ^objects (.getValue e)]
-                                        (when (nil? (aget vp 1))
-                                          (aset vp 1 (.getKey e))
-                                          (.push cold vp))))))]
-              (aget ^objects (.computeIfAbsent hot k (reify Function
-                                                       (apply [_ k]
-                                                         (let [v (f k)
-                                                               vp (doto (object-array 2)
-                                                                    (aset 0 v)
-                                                                    (aset 1 nil))]
-                                                           (move-to-cold)
-                                                           (while (> (.size hot) size)
-                                                             (let [vp ^objects (.poll cold)]
-                                                               (when-let [k (aget vp 1)]
-                                                                 (.remove hot k)))
-                                                             (move-to-cold))
-                                                           vp)))) 0))
-            (do (aset vp 1 nil)
-                (aget vp 0)))))
+        (if-let [vp ^objects (.get hot k)]
+          (do (aset vp 1 nil)
+              (aget vp 0))
+          (let [k (stored-key-fn k)
+                vp (.computeIfAbsent hot k (reify Function
+                                             (apply [_ k]
+                                               (let [v (f k)
+                                                     vp (doto (object-array 2)
+                                                          (aset 0 v)
+                                                          (aset 1 nil))]
+                                                 (move-to-cold)
+                                                 (while (> (.size hot) size)
+                                                   (let [vp ^objects (.poll cold)]
+                                                     (when-let [k (aget vp 1)]
+                                                       (.remove hot k)))
+                                                   (move-to-cold))
+                                                 vp))))]
+            (aget ^objects vp 0))))
 
       (evict [_ k]
         (when-let [vp ^objects (.remove hot k)]
@@ -157,4 +157,4 @@
       (count [_]
         (.size hot)))))
 
-(def new-cache new-lru-cache)
+(def new-cache new-second-chance-cache)
