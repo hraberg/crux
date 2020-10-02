@@ -6,8 +6,9 @@
            java.lang.reflect.Field
            java.util.concurrent.locks.StampedLock
            java.util.function.Function
-           [java.util ArrayDeque Map Map$Entry]
-           java.util.concurrent.ConcurrentHashMap))
+           [java.util ArrayDeque LinkedHashMap Map Map$Entry]
+           java.util.concurrent.ConcurrentHashMap
+           com.github.benmanes.caffeine.cache.Caffeine))
 
 (set! *unchecked-math* :warn-on-boxed)
 
@@ -15,6 +16,76 @@
   (compute-if-absent [this k stored-key-fn f])
   ; key-fn sometimes used to copy the key to prevent memory leaks
   (evict [this k]))
+
+(defn new-lru-cache [^long size]
+  (let [cache (proxy [LinkedHashMap] [size 0.75 true]
+                (removeEldestEntry [_]
+                  (> (.size ^Map this) size)))
+        lock (StampedLock.)]
+    (reify
+      Object
+      (toString [this]
+        (.toString cache))
+
+      LRUCache
+      (compute-if-absent [this k stored-key-fn f]
+        (let [v (.valAt this k ::not-found)] ; use ::not-found as values can be falsy
+          (if (= ::not-found v)
+            (let [k (stored-key-fn k)
+                  v (f k)]
+              (cio/with-write-lock lock
+                ;; lock the cache only after potentially heavy value and key calculations are done
+                (.computeIfAbsent cache k (reify Function
+                                            (apply [_ k]
+                                              v)))))
+            v)))
+
+      (evict [_ k]
+        (cio/with-write-lock lock
+          (.remove cache k)))
+
+      ILookup
+      (valAt [this k]
+        (cio/with-write-lock lock
+          (.get cache k)))
+
+      (valAt [this k default]
+        (cio/with-write-lock lock
+          (.getOrDefault cache k default)))
+
+      Counted
+      (count [_]
+        (.size cache)))))
+
+(defn new-caffeine-cache [^long size]
+  (let [cache (-> (Caffeine/newBuilder) (.maximumSize size) (.build))]
+    (reify
+      Object
+      (toString [_]
+        (.toString cache))
+
+      LRUCache
+      (compute-if-absent [_ k stored-key-fn f]
+        (if-let [v (.getIfPresent cache k)]
+          v
+          (let [k (stored-key-fn k)]
+            (.get cache k (reify Function
+                            (apply [_ k]
+                              (f k)))))))
+
+      (evict [_ k]
+        (.invalidate cache k))
+
+      ILookup
+      (valAt [_ k]
+        (.getIfPresent cache k))
+
+      (valAt [_ k default]
+        (or (.getIfPresent cache k) default))
+
+      Counted
+      (count [_]
+        (.estimatedSize cache)))))
 
 (def ^:private ^Field concurrent-map-table-field
   (doto (.getDeclaredField ConcurrentHashMap "table")
@@ -28,7 +99,7 @@
           e
           (recur (rem (inc i) (alength table))))))))
 
-(defn new-cache [^long size]
+(defn new-second-chance-cache [^long size]
   (let [hot (ConcurrentHashMap. size)
         cold-factor 0.1
         cold (ArrayDeque. (long (Math/ceil (* cold-factor size))))]
@@ -85,3 +156,5 @@
       Counted
       (count [_]
         (.size hot)))))
+
+(def new-cache new-lru-cache)
