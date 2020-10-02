@@ -6,8 +6,8 @@
            java.lang.reflect.Field
            java.util.concurrent.locks.StampedLock
            java.util.function.Function
-           [java.util ArrayDeque LinkedHashMap Map Map$Entry]
-           java.util.concurrent.ConcurrentHashMap
+           [java.util LinkedHashMap Map Map$Entry]
+           [java.util.concurrent ConcurrentLinkedQueue ConcurrentHashMap]
            com.github.benmanes.caffeine.cache.Caffeine))
 
 (set! *unchecked-math* :warn-on-boxed)
@@ -102,14 +102,14 @@
 (defn new-second-chance-cache [^long size]
   (let [hot (ConcurrentHashMap. size)
         cold-factor 0.1
-        cold (ArrayDeque. (long (Math/ceil (* cold-factor size))))
+        cold (ConcurrentLinkedQueue.)
         move-to-cold #(let [cold-target-size (long (Math/ceil (* cold-factor (.size hot))))]
                         (while (< (.size cold) cold-target-size)
                           (let [e (random-entry hot)]
                             (when-let [vp ^objects (.getValue e)]
                               (when (nil? (aget vp 1))
                                 (aset vp 1 (.getKey e))
-                                (.push cold vp))))))]
+                                (.offer cold vp))))))]
     (reify
       Object
       (toString [_]
@@ -121,10 +121,10 @@
           (do (aset vp 1 nil)
               (aget vp 0))
           (let [k (stored-key-fn k)
+                v (f k)
                 vp (.computeIfAbsent hot k (reify Function
                                              (apply [_ k]
-                                               (let [v (f k)
-                                                     vp (doto (object-array 2)
+                                               (let [vp (doto (object-array 2)
                                                           (aset 0 v)
                                                           (aset 1 nil))]
                                                  (move-to-cold)
