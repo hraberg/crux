@@ -141,7 +141,13 @@
                             (when-let [vp ^objects (.getValue e)]
                               (when (nil? (aget vp 1))
                                 (aset vp 1 (.getKey e))
-                                (.offer cold vp))))))]
+                                (.offer cold vp))))))
+        resize-cache #(do (move-to-cold)
+                          (while (> (.size hot) size)
+                            (let [vp ^objects (.poll cold)]
+                              (when-let [k (aget vp 1)]
+                                (.remove hot k)))
+                            (move-to-cold)))]
     (reify
       Object
       (toString [_]
@@ -154,18 +160,12 @@
               (aget vp 0))
           (let [k (stored-key-fn k)
                 v (f k)
+                _ (resize-cache)
                 vp (.computeIfAbsent hot k (reify Function
                                              (apply [_ k]
-                                               (let [vp (doto (object-array 2)
-                                                          (aset 0 v)
-                                                          (aset 1 nil))]
-                                                 (move-to-cold)
-                                                 (while (> (.size hot) size)
-                                                   (let [vp ^objects (.poll cold)]
-                                                     (when-let [k (aget vp 1)]
-                                                       (.remove hot k)))
-                                                   (move-to-cold))
-                                                 vp))))]
+                                               (doto (object-array 2)
+                                                 (aset 0 v)
+                                                 (aset 1 nil)))))]
             (aget ^objects vp 0))))
 
       (evict [_ k]
