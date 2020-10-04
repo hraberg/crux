@@ -57,6 +57,38 @@
       (count [_]
         (.size cache)))))
 
+(defn new-static-cache [^long size]
+  (let [cache (ConcurrentHashMap. size)]
+    (reify
+      Object
+      (toString [_]
+        (.toString cache))
+
+      LRUCache
+      (compute-if-absent [_ k stored-key-fn f]
+        (let [v (.getOrDefault cache k ::not-found)]
+          (if (= ::not-found v)
+            (let [k (stored-key-fn k)
+                  v (f k)]
+              (.computeIfAbsent cache k (reify Function
+                                          (apply [_ k]
+                                            v))))
+            v)))
+
+      (evict [_ k]
+        (.remove cache k))
+
+      ILookup
+      (valAt [_ k]
+        (.get cache k))
+
+      (valAt [_ k default]
+        (.getOrDefault cache k default))
+
+      Counted
+      (count [_]
+        (.size cache)))))
+
 (defn new-caffeine-cache [^long size]
   (let [cache (-> (Caffeine/newBuilder) (.maximumSize size) (.build))]
     (reify
