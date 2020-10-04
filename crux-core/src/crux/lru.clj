@@ -155,18 +155,16 @@
 
       LRUCache
       (compute-if-absent [_ k stored-key-fn f]
-        (if-let [vp ^objects (.get hot k)]
-          (do (aset vp 1 nil)
-              (aget vp 0))
-          (let [k (stored-key-fn k)
-                v (f k)
-                _ (resize-cache)
-                vp (.computeIfAbsent hot k (reify Function
-                                             (apply [_ k]
-                                               (doto (object-array 2)
-                                                 (aset 0 v)
-                                                 (aset 1 nil)))))]
-            (aget ^objects vp 0))))
+        (let [vp ^objects (or (.get hot k)
+                              (let [k (stored-key-fn k)
+                                    v (f k)]
+                                (resize-cache)
+                                (.computeIfAbsent hot k (reify Function
+                                                          (apply [_ k]
+                                                            (doto (object-array 2)
+                                                              (aset 0 v)))))))]
+          (aset vp 1 nil)
+          (aget vp 0)))
 
       (evict [_ k]
         (when-let [vp ^objects (.remove hot k)]
