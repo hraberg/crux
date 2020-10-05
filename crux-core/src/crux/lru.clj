@@ -158,11 +158,11 @@
         (let [^objects vp (or (.get hot k)
                               (let [k (stored-key-fn k)
                                     v (f k)]
-                                (resize-cache)
                                 (.computeIfAbsent hot k (reify Function
                                                           (apply [_ k]
                                                             (doto (object-array 2)
                                                               (aset 0 v)))))))]
+          (resize-cache)
           (aset vp 1 nil)
           (aget vp 0)))
 
