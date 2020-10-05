@@ -155,7 +155,7 @@
 
       LRUCache
       (compute-if-absent [_ k stored-key-fn f]
-        (let [vp ^objects (or (.get hot k)
+        (let [^objects vp (or (.get hot k)
                               (let [k (stored-key-fn k)
                                     v (f k)]
                                 (resize-cache)
