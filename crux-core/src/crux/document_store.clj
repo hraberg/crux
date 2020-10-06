@@ -74,19 +74,15 @@
   (close [_]))
 
 (defn ->cached-document-store
-  {::sys/deps {:document-store :crux/document-store
+  {::sys/deps {:document-store 'crux.kv.document-store/->document-store
                :document-cache 'crux.cache/->cache}}
   [{:keys [document-cache document-store]}]
   (->CachedDocumentStore document-cache document-store))
 
-(defn ->file-document-store {::sys/deps {:document-cache :crux/document-cache}
-                             ::sys/args {:dir {:doc "Directory to store documents"
+(defn ->file-document-store {::sys/args {:dir {:doc "Directory to store documents"
                                                :required? true
                                                :spec ::sys/path}}}
-  [{:keys [^Path dir document-cache] :as opts}]
+  [{:keys [^Path dir] :as opts}]
   (let [dir (.toFile dir)]
     (.mkdirs dir)
-    (->cached-document-store
-     (assoc opts
-            :document-cache document-cache
-            :document-store (->FileDocumentStore dir)))))
+    (->FileDocumentStore dir)))

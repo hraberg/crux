@@ -31,7 +31,9 @@
 
 (def standalone-config
   {:crux {:crux/index-store {:kv-store {:crux/module `rocks/->kv-store, :db-dir (io/file dev-node-dir "indexes")}}
-          :crux/document-store {:kv-store {:crux/module `rocks/->kv-store, :db-dir (io/file dev-node-dir "documents")}}
+          :crux/document-store {:crux/module 'crux.document-store/->cached-document-store
+                                :document-store {:crux/module 'crux.kv.document-store/->document-store
+                                                 :kv-store {:crux/module `rocks/->kv-store, :db-dir (io/file dev-node-dir "documents")}}}
           :crux/tx-log {:kv-store {:crux/module `rocks/->kv-store, :db-dir (io/file dev-node-dir "tx-log")}}
           :crux.metrics.jmx/reporter {}
           :crux.http-server/server {}}})

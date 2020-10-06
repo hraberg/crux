@@ -9,8 +9,9 @@
   (fix/with-opts {::j/connection-pool {:pool-opts pool-opts, :dialect dialect, :db-spec db-spec}
                   :crux/tx-log {:crux/module `j/->tx-log
                                 :connection-pool ::j/connection-pool}
-                  :crux/document-store {:crux/module `j/->document-store,
-                                        :connection-pool ::j/connection-pool}}
+                  :crux/document-store {:crux/module 'crux.document-store/->cached-document-store
+                                        :document-store {:crux/module `j/->document-store,
+                                                         :connection-pool ::j/connection-pool}}}
     f))
 
 (defn with-h2-opts [f]

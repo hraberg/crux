@@ -119,15 +119,6 @@
                                     :prefix {:required? false,
                                              :spec ::prefix
                                              :doc "S3 prefix"}}
-                        ::sys/deps {:configurator `->configurator
-                                    :document-cache 'crux.cache/->cache}}
-
-  [{:keys [bucket prefix ^S3Configurator configurator document-cache] :as opts}]
-  (ds/->cached-document-store
-   (assoc opts
-          :document-cache document-cache
-          :document-store
-          (->S3DocumentStore configurator
-                             (.makeClient configurator)
-                             bucket
-                             prefix))))
+                        ::sys/deps {:configurator `->configurator}}
+  [{:keys [bucket prefix ^S3Configurator configurator] :as opts}]
+  (->S3DocumentStore configurator (.makeClient configurator) bucket prefix))
