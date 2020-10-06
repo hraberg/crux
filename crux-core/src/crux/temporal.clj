@@ -3,8 +3,8 @@
   (:import [java.util Date Map NavigableMap TreeMap TreeSet]))
 
 (defprotocol ITimeSpan
-  (beginning [_] "Return the beginning of a span of time")
-  (end [_] "Return the end of a span of time"))
+  (beginning [_])
+  (end [_]))
 
 (defrecord Interval [^Date beginning ^Date end]
   ITimeSpan
@@ -16,10 +16,10 @@
 
   Comparable
   (compareTo [this other]
-    (compare [(crux.temporal/beginning this)
-              (crux.temporal/end this)]
-             [(crux.temporal/beginning other)
-              (crux.temporal/end other)])))
+    (let [diff (compare (crux.temporal/beginning this) (crux.temporal/beginning other))]
+      (if (zero? diff)
+        (compare (crux.temporal/end this) (crux.temporal/end other))
+        diff))))
 
 (extend-protocol ITimeSpan
   Date
