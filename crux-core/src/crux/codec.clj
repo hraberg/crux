@@ -286,7 +286,7 @@
 (defn- decode-char ^Character [^DirectBuffer buffer]
   (.getChar buffer value-type-id-size ByteOrder/BIG_ENDIAN))
 
-(defn- decode-interval ^crux.codec.Interval [^DirectBuffer buffer]
+(defn- decode-interval ^crux.temporal.Interval [^DirectBuffer buffer]
   (temp/->Interval (Date. (bit-xor (.getLong buffer value-type-id-size  ByteOrder/BIG_ENDIAN) Long/MIN_VALUE))
                    (Date. (bit-xor (.getLong buffer (+ value-type-id-size Long/BYTES)  ByteOrder/BIG_ENDIAN) Long/MIN_VALUE))))
 

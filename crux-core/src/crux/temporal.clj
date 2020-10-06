@@ -8,8 +8,8 @@
 
 (defrecord Interval [^Date beginning ^Date end]
   ITimeSpan
-  (beginning [_] (or beginning (Date. Long/MIN_VALUE)))
-  (end [_] (or end (Date. Long/MAX_VALUE)))
+  (beginning [_] (or beginning #inst "0001"))
+  (end [_] (or end #inst "9999"))
 
   Inst
   (inst-ms* [_] (.getTime beginning))
@@ -24,7 +24,7 @@
 (extend-protocol ITimeSpan
   Date
   (beginning [this] this)
-  (end [this] this))
+  (end [this] (Date. (unchecked-inc (.getTime this)))))
 
 ;; Allen's Basic Relations, adapted from https://github.com/juxt/tick
 

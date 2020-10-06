@@ -17,6 +17,7 @@
             [crux.tx :as tx]
             [crux.error :as err]
             [crux.tx.conform :as txc]
+            [crux.temporal :as temp]
             [taoensso.nippy :as nippy]
             [edn-query-language.core :as eql]
             [clojure.string :as string]
@@ -25,7 +26,7 @@
   (:import [clojure.lang Box ExceptionInfo MapEntry]
            (crux.api ICruxDatasource HistoryOptions HistoryOptions$SortOrder NodeOutOfSyncException)
            crux.codec.EntityTx
-           crux.index.IndexStoreIndexState
+           [crux.index IndexStoreIndex IndexStoreIndexState]
            (java.io Closeable Writer)
            (java.util Collection Comparator Date List UUID)
            [java.util.concurrent Future Executors ScheduledExecutorService TimeoutException TimeUnit]))
@@ -54,7 +55,9 @@
 
 (s/def ::triple (s/and vector? (s/cat :e (some-fn logic-var? c/valid-id? set?)
                                       :a (s/and c/valid-id? some?)
-                                      :v (s/? (some-fn logic-var? literal?)))))
+                                      :v (s/? (some-fn logic-var? literal?))
+                                      :vt (s/? logic-var?)
+                                      :tt (s/? logic-var?))))
 
 (s/def ::args-list (s/coll-of logic-var? :kind vector? :min-count 1))
 
@@ -517,6 +520,12 @@
      :v-vars (set (for [{:keys [v]} triple-clauses
                         :when (logic-var? v)]
                     v))
+     :vt-vars (set (for [{:keys [vt]} triple-clauses
+                         :when (logic-var? vt)]
+                     vt))
+     :tt-vars (set (for [{:keys [tt]} triple-clauses
+                         :when (logic-var? tt)]
+                     tt))
      :not-vars (->> (vals not-vars)
                     (reduce into not-join-vars))
      :pred-vars (set (for [{:keys [pred return]} pred-clauses
@@ -540,26 +549,68 @@
                                   arg))
                            or-join-vars)}))
 
-(defn- new-binary-index [{:keys [e a v] :as clause} {:keys [entity-resolver-fn]} index-snapshot {:keys [vars-in-join-order]}]
+(defn- new-binary-index [{:keys [e a v vt tt] :as clause} {:keys [entity-resolver-fn]} index-snapshot {:keys [vars-in-join-order]}]
   (let [order (keep #{e v} vars-in-join-order)
-        nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)]
+        nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)
+        new-vt-idx (fn [^IndexStoreIndex e-idx v-idx]
+                     (when vt
+                       (idx/new-index-store-index
+                        (fn [k]
+                          (for [[vt-x vt-y] (partition 2 1 nil (map :vt (db/entity-history nested-index-snapshot
+                                                                                           (db/decode-value index-snapshot (.key ^IndexStoreIndexState (.state e-idx)))
+                                                                                           :asc
+                                                                                           (when k
+                                                                                             {:start
+                                                                                              {:crux.db/valid-time (db/decode-value index-snapshot k)}}))))]
+
+                            (db/encode-value index-snapshot (temp/->Interval vt-x vt-y)))))))
+        new-tt-idx (fn [^IndexStoreIndex e-idx v-idx ^IndexStoreIndex vt-idx]
+                     (when tt
+                       (idx/new-index-store-index
+                        (fn [k]
+                          (let [vt (db/decode-value index-snapshot (.key ^IndexStoreIndexState (.state vt-idx)))]
+                            (for [[tt-x tt-y] (partition 2 1 nil (map :tt (take-while
+                                                                           #(= (temp/beginning vt) (:vt %))
+                                                                           (db/entity-history nested-index-snapshot
+                                                                                              (db/decode-value index-snapshot (.key ^IndexStoreIndexState (.state e-idx)))
+                                                                                              :asc
+                                                                                              (merge-with
+                                                                                               merge
+                                                                                               {:with-corrections? true
+                                                                                                :start {:crux.db/valid-time (temp/beginning vt)}}
+                                                                                               (when k
+                                                                                                 {:start
+                                                                                                  {:crux.tx/tx-time (db/decode-value index-snapshot k)}}))))))]
+                              (db/encode-value index-snapshot (temp/->Interval tt-x tt-y))))))))]
     (if (= v (first order))
       (let [v-idx (idx/new-index-store-index
                    (fn [k]
                      (db/av nested-index-snapshot a k entity-resolver-fn)))
             e-idx (idx/new-index-store-index
                    (fn [k]
-                     (db/ave nested-index-snapshot a (.key ^IndexStoreIndexState (.state v-idx)) k entity-resolver-fn)))]
+                     (db/ave nested-index-snapshot a (.key ^IndexStoreIndexState (.state v-idx)) k entity-resolver-fn)))
+            vt-idx (when vt
+                     (new-vt-idx e-idx v-idx))
+            tt-idx (when tt
+                     (new-tt-idx e-idx v-idx vt-idx))]
         (log/debug :join-order :ave (cio/pr-edn-str v) e (cio/pr-edn-str clause))
-        (idx/new-n-ary-join-layered-virtual-index [v-idx e-idx]))
+        (idx/new-n-ary-join-layered-virtual-index  (cond-> [v-idx e-idx]
+                                                     vt (conj vt-idx)
+                                                     tt (conj tt-idx))))
       (let [e-idx (idx/new-index-store-index
                    (fn [k]
                      (db/ae nested-index-snapshot a k entity-resolver-fn)))
             v-idx (idx/new-index-store-index
                    (fn [k]
-                     (db/aev nested-index-snapshot a (.key ^IndexStoreIndexState (.state e-idx)) k entity-resolver-fn)))]
+                     (db/aev nested-index-snapshot a (.key ^IndexStoreIndexState (.state e-idx)) k entity-resolver-fn)))
+            vt-idx (when vt
+                     (new-vt-idx e-idx v-idx))
+            tt-idx (when tt
+                     (new-tt-idx e-idx v-idx vt-idx))]
         (log/debug :join-order :aev e (cio/pr-edn-str v) (cio/pr-edn-str clause))
-        (idx/new-n-ary-join-layered-virtual-index [e-idx v-idx])))))
+        (idx/new-n-ary-join-layered-virtual-index (cond-> [e-idx v-idx]
+                                                    vt (conj vt-idx)
+                                                    tt (conj tt-idx)))))))
 
 (defn- sort-triple-clauses [stats triple-clauses]
   (sort-by (fn [{:keys [a]}]
@@ -582,15 +633,16 @@
                               :when (or (literal? e)
                                         (literal? v))]
                           clause)
-        literal-join-order (concat (for [{:keys [e v]} literal-clauses]
-                                     (if (literal? v)
-                                       v
-                                       e))
-                                   in-vars
-                                   (for [{:keys [e v]} literal-clauses]
-                                     (if (literal? v)
-                                       e
-                                       v)))
+        literal-join-order (filter logic-var? (apply concat
+                                                     (for [{:keys [e v vt tt]} literal-clauses]
+                                                       (if (literal? v)
+                                                         v
+                                                         [e vt tt]))
+                                                     [in-vars]
+                                                     (for [{:keys [e v vt tt]} literal-clauses]
+                                                       (if (literal? v)
+                                                         [e vt tt]
+                                                         v))))
         self-join-clauses (filter (comp :self-join? meta) triple-clauses)
         self-join-vars (map :v self-join-clauses)
         join-order (loop [join-order (concat literal-join-order self-join-vars)
@@ -603,10 +655,12 @@
                                                                   (contains? join-order-set v))]
                                                     clause))
                                              clauses))]
-                       (if-let [{:keys [e a v]} clause]
-                         (recur (->> (sort-by var->frequency [v e])
-                                     (reverse)
-                                     (concat join-order))
+                       (if-let [{:keys [e a v vt tt]} clause]
+                         (recur (cond-> (->> (sort-by var->frequency [v e])
+                                             (reverse)
+                                             (concat join-order))
+                                  vt (conj vt)
+                                  tt (conj tt))
                                 (remove #{clause} clauses))
                          join-order)))]
     (log/debug :triple-joins-var->frequency var->frequency)
@@ -620,7 +674,7 @@
            (dep/graph)))
      (->> triple-clauses
           (reduce
-           (fn [var->joins {:keys [e a v] :as clause}]
+           (fn [var->joins {:keys [e a v vt tt] :as clause}]
              (let [join {:id (gensym "triple")
                          :idx-fn (fn [db index-snapshot compiled-query]
                                    (new-binary-index clause
@@ -629,6 +683,12 @@
                                                      compiled-query))}
                    var->joins (merge-with into var->joins {v [join]
                                                            e [join]})
+                   var->joins (if vt
+                                (merge-with into var->joins {vt [join]})
+                                var->joins)
+                   var->joins (if tt
+                                (merge-with into var->joins {tt [join]})
+                                var->joins)
                    var->joins (if (literal? e)
                                 (merge-with into var->joins {e [{:idx-fn
                                                                  (fn [db index-snapshot compiled-query]
@@ -784,6 +844,18 @@
   (->> (for [var in-vars
              :let [result-index (get var->values-result-index var)]]
          [var (value-var-binding var result-index :in-var)])
+       (into {})))
+
+(defn- build-vt-var-bindings [var->values-result-index vt-vars]
+  (->> (for [var vt-vars
+             :let [result-index (get var->values-result-index var)]]
+         [var (value-var-binding var result-index :vt-var)])
+       (into {})))
+
+(defn- build-tt-var-bindings [var->values-result-index tt-vars]
+  (->> (for [var tt-vars
+             :let [result-index (get var->values-result-index var)]]
+         [var (value-var-binding var result-index :tt-var)])
        (into {})))
 
 (defn- build-pred-return-var-bindings [var->values-result-index pred-clauses]
@@ -1283,6 +1355,8 @@
          :as type->clauses} (expand-leaf-preds (normalize-clauses where) in-vars stats)
         {:keys [e-vars
                 v-vars
+                vt-vars
+                tt-vars
                 range-vars
                 pred-vars
                 pred-return-vars]} (collect-vars type->clauses)
@@ -1323,6 +1397,8 @@
         var->bindings (merge (build-or-free-var-bindings var->values-result-index or-clause+idx-id+or-branches)
                              (build-pred-return-var-bindings var->values-result-index pred-clauses)
                              (build-in-var-bindings var->values-result-index in-vars)
+                             (build-vt-var-bindings var->values-result-index vt-vars)
+                             (build-tt-var-bindings var->values-result-index tt-vars)
                              (build-var-bindings var->attr
                                                  v-var->e
                                                  e->v-var
