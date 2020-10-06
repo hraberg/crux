@@ -5,10 +5,12 @@
             [crux.hash :as hash]
             [crux.memory :as mem]
             [crux.morton :as morton]
+            [crux.temporal :as temp]
             [taoensso.nippy :as nippy]
             [crux.io :as cio]
             [clojure.walk :as walk])
   (:import [clojure.lang IHashEq Keyword APersistentMap APersistentSet]
+           crux.temporal.Interval
            [java.io Closeable Writer]
            [java.net MalformedURLException URI URL]
            [java.nio ByteOrder ByteBuffer]
@@ -77,6 +79,7 @@
 (def ^:private date-value-type-id 7)
 (def ^:private string-value-type-id 8)
 (def ^:private char-value-type-id 9)
+(def ^:private interval-value-type-id 10)
 
 (def nil-id-bytes (doto (byte-array id-size)
                     (aset 0 (byte id-value-type-id))))
@@ -229,6 +232,15 @@
               (.putByte to (inc idx) (byte (+ offset b)))
               (recur (inc idx))))))))
 
+  Interval
+  (value->buffer [this ^MutableDirectBuffer to]
+    (mem/limit-buffer
+     (doto to
+       (.putByte 0 interval-value-type-id)
+       (.putLong value-type-id-size (bit-xor (.getTime ^Date (temp/beginning this)) Long/MIN_VALUE) ByteOrder/BIG_ENDIAN)
+       (.putLong (+ value-type-id-size Long/BYTES) (bit-xor (.getTime ^Date (temp/end this)) Long/MIN_VALUE) ByteOrder/BIG_ENDIAN))
+     (+ value-type-id-size Long/BYTES Long/BYTES)))
+
   Object
   (value->buffer [this ^MutableDirectBuffer to]
     (doto (id-function to (binding [*sort-unordered-colls* true]
@@ -274,10 +286,14 @@
 (defn- decode-char ^Character [^DirectBuffer buffer]
   (.getChar buffer value-type-id-size ByteOrder/BIG_ENDIAN))
 
+(defn- decode-interval ^crux.codec.Interval [^DirectBuffer buffer]
+  (temp/->Interval (Date. (bit-xor (.getLong buffer value-type-id-size  ByteOrder/BIG_ENDIAN) Long/MIN_VALUE))
+                   (Date. (bit-xor (.getLong buffer (+ value-type-id-size Long/BYTES)  ByteOrder/BIG_ENDIAN) Long/MIN_VALUE))))
+
 (defn can-decode-value-buffer? [^DirectBuffer buffer]
   (when (and buffer (pos? (.capacity buffer)))
     (case (.getByte buffer 0)
-      (3 4 5 6 7 8 9) true
+      (3 4 5 6 7 8 9 10) true
       false)))
 
 (defn decode-value-buffer [^DirectBuffer buffer]
@@ -290,6 +306,7 @@
       7 (Date. (decode-long buffer)) ;; date-value-type-id
       8 (decode-string buffer) ;; string-value-type-id
       9 (decode-char buffer) ;; char-value-type-id
+      10 (decode-interval buffer) ;; interval-value-type-id
       (throw (err/illegal-arg :unknown-type-id
                               {::err/message (str "Unknown type id: " type-id)})))))
 
