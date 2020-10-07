@@ -217,6 +217,9 @@ public class ByteUtils {
             }
         };
 
+    // BUG: "687474703a2f2f737761742e6373652e6c65686967682e6564752f6f6e746f2f756e69762d62656e63682e6f776c2374616b6573436f75727365"
+    // Expected: da08cdb675098b5b7aaa1a374fc958eca5acdeb8
+    // Actual:   db26777bf2461445404f126b7482e94f3d2e6194
     public static DirectBuffer sha1(final MutableDirectBuffer to, final DirectBuffer from) {
         to.boundsCheck(0, SHA1_HASH_SIZE);
         final int size = from.capacity();
@@ -331,6 +334,6 @@ public class ByteUtils {
         to.putInt(3 * Integer.BYTES, h3, ByteOrder.BIG_ENDIAN);
         to.putInt(4 * Integer.BYTES, h4, ByteOrder.BIG_ENDIAN);
 
-        return to;
+        return new UnsafeBuffer(to, 0, SHA1_HASH_SIZE);
     }
 }
