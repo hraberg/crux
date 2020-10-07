@@ -25,7 +25,7 @@
 
 (defn- read-value [^ToIntFunction f]
   (loop [limit initial-read-buffer-limit]
-    (let [out (mem/direct-byte-buffer (mem/allocate-unpooled-buffer limit))
+    (let [out (mem/direct-byte-buffer (mem/allocate-buffer limit))
           result (.applyAsInt f out)]
       (cond
         (= result RocksDB/NOT_FOUND)
