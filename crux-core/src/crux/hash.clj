@@ -55,8 +55,6 @@
 
 (declare id-hash)
 
-(def foo (atom nil))
-
 (defn- lazy-id-hash [to buffer]
   (locking #'lazy-id-hash
     (when (= id-hash lazy-id-hash)
