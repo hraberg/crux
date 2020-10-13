@@ -458,7 +458,7 @@
 (defn- advance-iterator-to-hash-cache-value [i value-buffer]
   (let [hash-cache-prefix-key (encode-hash-cache-key-to (.get seek-buffer-tl) value-buffer)
         found-k (kv/seek i hash-cache-prefix-key)]
-    (and found-k
+    (and (some? found-k)
          (mem/buffers=? found-k hash-cache-prefix-key (.capacity hash-cache-prefix-key)))))
 
 (defn- value-buffer->id-buffer ^org.agrona.DirectBuffer [index-snapshot ^DirectBuffer value-buffer]
@@ -533,7 +533,7 @@
       (some->> (encode-av-key-to (.get seek-buffer-tl)
                                  attr-buffer
                                  (buffer-or-value-buffer min-v))
-               (step-fn i #(key-suffix % (.capacity prefix))))))
+               (step-fn i #(canonical-buffer-lookup canonical-buffer-cache (key-suffix % (.capacity prefix)))))))
 
   (ave [this a v min-e entity-resolver-fn]
     (let [attr-buffer (c/->id-buffer a)
@@ -544,7 +544,7 @@
                                   attr-buffer
                                   value-buffer
                                   (buffer-or-value-buffer min-e))
-               (step-fn i #(let [eid-value-buffer (key-suffix % (.capacity prefix))
+               (step-fn i #(let [eid-value-buffer (canonical-buffer-lookup canonical-buffer-cache (key-suffix % (.capacity prefix)))
                                  eid-buffer (value-buffer->id-buffer this eid-value-buffer)]
                              (when-let [content-hash-buffer (entity-resolver-fn eid-buffer)]
                                (when-let [vs (cav-cache-lookup cav-cache canonical-buffer-cache @cache-iterator-delay
@@ -559,7 +559,7 @@
       (some->> (encode-ae-key-to (.get seek-buffer-tl)
                                  attr-buffer
                                  (buffer-or-value-buffer min-e))
-               (step-fn i #(key-suffix % (.capacity prefix))))))
+               (step-fn i #(canonical-buffer-lookup canonical-buffer-cache (key-suffix % (.capacity prefix)))))))
 
   (aev [this a e min-v entity-resolver-fn]
     (let [attr-buffer (c/->id-buffer a)
@@ -584,7 +584,7 @@
           (if (<= (compare (decode-entity+vt+tt+tx-id-key-as-tt-from k) transact-time) 0)
             (let [v (kv/value i)]
               (when-not (mem/buffers=? c/nil-id-buffer v)
-                v))
+                (canonical-buffer-lookup canonical-buffer-cache v)))
             (if morton/*use-space-filling-curve-index?*
               (let [seek-z (encode-entity-tx-z-number valid-time transact-time)]
                 (when-let [[k v] (find-entity-tx-within-range-with-highest-valid-time i seek-z morton/z-max-mask eid-buffer nil)]
@@ -697,11 +697,11 @@
                       (into {} (remove (fn [[k doc]]
                                          (let [eid-value (c/->value-buffer (:crux.db/id doc))
                                                content-hash (c/->id-buffer k)]
-                                           (kv/get-value snapshot (encode-ecav-key-to (.get seek-buffer-tl)
-                                                                                      eid-value
-                                                                                      content-hash
-                                                                                      crux-db-id
-                                                                                      eid-value))))))
+                                           (some? (kv/get-value snapshot (encode-ecav-key-to (.get seek-buffer-tl)
+                                                                                             eid-value
+                                                                                             content-hash
+                                                                                             crux-db-id
+                                                                                             eid-value)))))))
                       not-empty))
           content-idx-kvs (->content-idx-kvs docs)]
       (some->> (seq content-idx-kvs) (kv/store kv-store))

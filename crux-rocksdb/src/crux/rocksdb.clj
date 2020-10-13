@@ -14,25 +14,32 @@
            java.nio.ByteBuffer
            (java.nio.file Files Path)
            java.nio.file.attribute.FileAttribute
-           java.util.function.ToIntFunction
+           [java.util.function Supplier ToIntFunction]
            (org.rocksdb Checkpoint CompressionType FlushOptions LRUCache
                         Options ReadOptions RocksDB RocksIterator
                         WriteBatch WriteOptions Statistics StatsLevel)))
 
 (set! *unchecked-math* :warn-on-boxed)
 
-(def ^:const ^:private initial-read-buffer-limit 128)
+(def ^:const ^:private initial-read-buffer-limit 4096)
+
+(def ^:private ^ThreadLocal read-buffer-tl
+  (ThreadLocal/withInitial
+   (reify Supplier
+     (get [_]
+       (ByteBuffer/allocateDirect initial-read-buffer-limit)))))
 
 (defn- read-value [^ToIntFunction f]
-  (loop [limit initial-read-buffer-limit]
-    (let [out (ByteBuffer/allocateDirect limit)
-          result (.applyAsInt f out)]
+  (loop [out (.clear ^ByteBuffer (.get read-buffer-tl))]
+    (let [limit (.capacity out)
+          length (.applyAsInt f out)]
       (cond
-        (= result RocksDB/NOT_FOUND)
+        (= length RocksDB/NOT_FOUND)
         nil
 
-        (< limit result)
-        (recur result)
+        (< limit length)
+        (recur (doto (ByteBuffer/allocateDirect length)
+                 (->> (.set read-buffer-tl))))
 
         :else
         (mem/as-buffer out)))))
