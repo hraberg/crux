@@ -558,8 +558,8 @@
                                                               [["null"]]
                                                               actual))
              :let [msg (pr-str [expected-row actual-row])]]
-         (and (= (count expected-row)
-                 (count actual-row))
+         (and (t/is (= (count expected-row)
+                       (count actual-row)))
               (every? true?
                       (mapv
                        (fn [x y]
