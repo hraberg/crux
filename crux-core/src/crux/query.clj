@@ -585,7 +585,7 @@
                                   (contains? pred-var-frequencies var) (/ (* 2.0 (double (get pred-var-frequencies var)))))))
         update-cardinality (fn [acc {:keys [e a v] :as clause}]
                              (let [{:keys [self-join?]} (meta clause)
-                                   cardinality (get stats a)
+                                   cardinality (get stats a 0.0)
                                    vs (cardinality-for-var v cardinality self-join?)
                                    es (cardinality-for-var e cardinality self-join?)]
                                (-> acc
@@ -607,7 +607,7 @@
                              new-reachable-vars (set (for [{:keys [e v]} (get var->clauses var)
                                                            var [e v]]
                                                        var))]
-                         (recur (remove #{var} vars)
+                         (recur (remove (partial = var) vars)
                                 (conj join-order var)
                                 (set/union reachable-vars new-reachable-vars)))
                        join-order))]
