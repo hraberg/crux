@@ -589,7 +589,7 @@
                                                 (literal? var)
                                                 (count (c/vectorize-value var))
                                                 self-join?
-                                                1.0
+                                                2.0
                                                 (contains? in-vars var)
                                                 0.5
                                                 :else
@@ -600,7 +600,7 @@
                              (let [{:keys [self-join?]} (meta clause)
                                    cardinality (get stats a 0.0)
                                    vs (cardinality-for-var v cardinality self-join?)
-                                   es (cardinality-for-var e cardinality self-join?)]
+                                   es (cardinality-for-var e cardinality false)]
                                (-> acc
                                    (update v (fnil min Double/MAX_VALUE) vs)
                                    (update e (fnil min Double/MAX_VALUE) es))))
