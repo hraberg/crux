@@ -392,28 +392,28 @@
 
     (t/is (thrown-with-msg?
            IllegalArgumentException
-           #"Clause refers to unknown variable: bah"
+           #"Unknown variable"
            (api/q (api/db *api*) '{:find [x]
                                    :where [[x :foo]
                                            [(+ 1 bah)]]})))
 
     (t/is (thrown-with-msg?
            RuntimeException
-           #"Circular dependency between bah and bah"
+           #"Circular dependency"
            (api/q (api/db *api*) '{:find [x]
                                    :where [[x :foo]
                                            [(+ 1 bah) bah]]})))
 
     (t/is (thrown-with-msg?
            RuntimeException
-           #"Circular dependency between bar and foo"
+           #"Circular dependency"
            (api/q (api/db *api*) '{:find [foo]
                                    :where [[(+ 1 bar) foo]
                                            [(+ 1 foo) bar]]})))
 
     (t/is (thrown-with-msg?
            RuntimeException
-           #"Circular dependency between foo and bar"
+           #"Circular dependency"
            (api/q (api/db *api*) '{:find [foo]
                                    :where [[(+ 1 foo) bar]
                                            [(+ 1 bar) foo]]})))

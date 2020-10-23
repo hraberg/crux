@@ -640,16 +640,10 @@
                          (recur (remove (partial = var) vars)
                                 (conj join-order var)
                                 (set/union reachable-vars new-reachable-vars)))
-                       join-order))]
+                       (vec (distinct join-order))))]
     (log/debug :triple-joins-var->cardinality var->cardinality)
     (log/debug :triple-joins-join-order join-order)
-    [(->> join-order
-          (distinct)
-          (partition 2 1)
-          (reduce
-           (fn [g [a b]]
-             (dep/depend g b a))
-           (dep/graph)))
+    [join-order
      (->> triple-clauses
           (reduce
            (fn [var->joins {:keys [e a v] :as clause}]
@@ -1145,38 +1139,53 @@
        (every? (fn [f]
                  (f index-snapshot db idx-id->idx join-keys)))))
 
-(defn- calculate-join-order [pred-clauses or-clause+idx-id+or-branches var->joins triple-join-deps]
-  (let [g (->> (keys var->joins)
-               (reduce
-                (fn [g v]
-                  (dep/depend g v ::root))
-                triple-join-deps))
-        g (reduce
-           (fn [g {:keys [pred return] :as pred-clause}]
-             (let [pred-vars (filter logic-var? (:args pred))]
-               (->> (for [pred-var pred-vars
-                          :when return
-                          return-var (find-binding-vars return)]
-                      [return-var pred-var])
-                    (reduce
-                     (fn [g [r a]]
-                       (dep/depend g r a))
-                     g))))
-           g
-           pred-clauses)
-        g (reduce
-           (fn [g [_ _ [{:keys [free-vars bound-vars]}]]]
-             (->> (for [bound-var bound-vars
-                        free-var free-vars]
-                    [free-var bound-var])
-                  (reduce
-                   (fn [g [f b]]
-                     (dep/depend g f b))
-                   g)))
-           g
-           or-clause+idx-id+or-branches)
-        join-order (dep/topo-sort g)]
-    (vec (remove #{::root} join-order))))
+(defn- calculate-join-order [pred-clauses or-clause+idx-id+or-branches triple-join-order in-vars]
+  (let [deps (set (concat
+                   (for [{:keys [pred return]} pred-clauses
+                         :let [pred-vars (cond->> (:args pred)
+                                           (not (pred-constraint? (:pred-fn pred))) (cons (:pred-fn pred))
+                                           true (filter logic-var?))]]
+                     [(set pred-vars)
+                      (set (find-binding-vars return))])
+                   (for [[_ _ [{:keys [free-vars bound-vars]}]] or-clause+idx-id+or-branches]
+                     [(set bound-vars)
+                      (set free-vars)])))
+        join-order (loop [join-order []
+                          vars (vec (concat (remove (set triple-join-order) in-vars)
+                                            triple-join-order))
+                          deps deps]
+                     (if (or (not-empty vars)
+                             (not-empty deps))
+                       (let [reachable-vars (set join-order)
+                             new-deps (set (or (not-empty (for [[from to :as dep] deps
+                                                                :when (set/superset? reachable-vars from)]
+                                                            dep))
+                                               (when (and (empty? vars)
+                                                          (not-empty deps))
+                                                 (if (and (= 1 (count deps))
+                                                          (let [[from to] (first deps)]
+                                                            (empty? (set/intersection from to))))
+                                                   (throw (err/illegal-arg :circular-dependency
+                                                                           {::err/message "Unknown variables"
+                                                                            :variables (vec (ffirst deps))}))
+                                                   (throw (err/illegal-arg :circular-dependency
+                                                                           {::err/message "Circular dependency"
+                                                                            :in-variables
+                                                                            (set (mapcat first deps))
+                                                                            :out-variables
+                                                                            (set (mapcat second deps))}))))))
+                             advance? (and (empty? new-deps)
+                                           (not-empty vars))
+                             var (first vars)
+                             join-order (cond-> join-order
+                                          (and advance? (not (contains? reachable-vars var))) (conj var))]
+                         (recur (into join-order (distinct (mapcat second new-deps)))
+                                (if advance?
+                                  (next vars)
+                                  vars)
+                                (set/difference deps new-deps)))
+                       join-order))]
+    join-order))
 
 (defn- rule-name->rules [rules]
   (group-by (comp :name :head) rules))
@@ -1335,11 +1344,11 @@
                 pred-vars
                 pred-return-vars]} (collect-vars type->clauses)
         var->joins {}
-        [triple-join-deps var->joins var->cardinality] (triple-joins triple-clauses
-                                                                     var->joins
-                                                                     type->clauses
-                                                                     in-vars
-                                                                     stats)
+        [triple-join-order var->joins var->cardinality] (triple-joins triple-clauses
+                                                                      var->joins
+                                                                      type->clauses
+                                                                      in-vars
+                                                                      stats)
         [in-idx-ids var->joins] (in-joins (:bindings in) var->joins)
         [pred-clause+idx-ids var->joins] (pred-joins pred-clauses var->joins)
         known-vars (set/union e-vars v-vars in-vars)
@@ -1357,7 +1366,7 @@
         or-clause+idx-id+or-branches (concat or-clause+idx-id+or-branches
                                              or-join-clause+idx-id+or-branches)
         join-depth (count var->joins)
-        vars-in-join-order (calculate-join-order pred-clauses or-clause+idx-id+or-branches var->joins triple-join-deps)
+        vars-in-join-order (calculate-join-order pred-clauses or-clause+idx-id+or-branches triple-join-order in-vars)
         var->values-result-index (zipmap vars-in-join-order (range))
         v-var->e (build-v-var->e triple-clauses var->values-result-index)
         e->v-var (set/map-invert v-var->e)
