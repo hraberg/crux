@@ -577,7 +577,8 @@
                       :as type->clauses}
                      in-vars
                      stats]
-  (let [collected-vars (collect-vars type->clauses)
+  (let [unique-counts (:unique-counts (meta stats))
+        collected-vars (collect-vars type->clauses)
         pred-var-frequencies (frequencies
                               (for [{:keys [pred return]} pred-clauses
                                     :when (not return)
@@ -602,7 +603,7 @@
 
                                 (or (contains? (:not-vars collected-vars) var)
                                     (contains? (:pred-return-vars collected-vars) var))
-                                (Math/pow 0.25)
+                                (Math/pow 0.125)
 
                                 (contains? pred-var-frequencies var)
                                 (Math/pow (/ 0.25 (double (get pred-var-frequencies var))))
@@ -611,17 +612,20 @@
                                 (Math/pow (/ 0.5 (double (get range-var-frequencies var))))))
         update-cardinality (fn [acc {:keys [e a v] :as clause}]
                              (let [{:keys [self-join? ignore-v?]} (meta clause)
-                                   cardinality (double (get stats a 0.0))
-                                   es (double (cardinality-for-var e (cond->> cardinality
-                                                                       (literal? v) (/ 1.0))))
+                                   es (double (cardinality-for-var e (cond-> (double (unique-counts :e a))
+                                                                       (literal? v) (->> (/ 1.0))
+                                                                       (literal? v) (/ (double (unique-counts :v a)))
+                                                                       (literal? v) (* (count (c/vectorize-value v))))))
                                    vs (cond
                                         ignore-v?
                                         Double/MAX_VALUE
                                         self-join?
                                         (Math/nextUp es)
                                         :else
-                                        (cardinality-for-var v (cond->> cardinality
-                                                                 (literal? e) (/ 1.0))))]
+                                        (cardinality-for-var v (cond-> (double (unique-counts :v a))
+                                                                 (literal? e) (->> (/ 1.0))
+                                                                 (literal? e) (/ (double (unique-counts :e a)))
+                                                                 (literal? e) (* (count (c/vectorize-value e))))))]
                                (-> acc
                                    (update v (fnil min Double/MAX_VALUE) vs)
                                    (update e (fnil min Double/MAX_VALUE) es))))
@@ -655,8 +659,8 @@
                                 (vec (concat join-order new-vars-to-add))
                                 (cons (set/difference new-reachable-vars (set new-vars-to-add)) reachable-var-groups)))
                        (vec (distinct join-order))))]
-    (log/debug :triple-joins-var->cardinality var->cardinality)
-    (log/debug :triple-joins-join-order join-order)
+    (log/info :triple-joins-var->cardinality var->cardinality)
+    (log/info :triple-joins-join-order join-order)
     [(->> join-order
           (distinct)
           (partition 2 1)
@@ -1448,10 +1452,65 @@
                                                     logic-var+range-constraint)))))
     compiled-query))
 
-(defn- build-sub-query [index-snapshot {:keys [query-cache] :as db} where in in-args rule-name->rules stats]
+;; http://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf
+(defn- ->hyper-log-log
+  (^ints []
+   (->hyper-log-log 1024))
+  (^ints [^long m]
+   (int-array m)))
+
+(defn- hyper-log-log-update ^ints [^ints hll v]
+  (let [m (alength hll)
+        b (Integer/numberOfTrailingZeros m)
+        x (long (hash v))
+        j (bit-and (bit-shift-right x (- Integer/SIZE b)) (dec m))
+        w (bit-and x (dec (bit-shift-left 1 (- Integer/SIZE b))))]
+    (doto hll
+      (aset j (max (aget hll j)
+                   (- (inc (Integer/numberOfLeadingZeros w)) b))))))
+
+(defn- hyper-log-log-estimate ^double [^ints hll]
+  (let [m (alength hll)
+        z (/ 1.0 (double (areduce hll n acc 0.0 (+ acc (Math/pow 2.0 (- (aget hll n)))))))
+        am (/ 0.7213 (inc (/ 1.079 m)))
+        e (* am (Math/pow m 2.0) z)]
+    (cond
+      (<= e (* (double (/ 5 2)) m))
+      (let [v (long (areduce hll n acc 0 (+ acc (if (zero? (aget hll n)) 1 0))))]
+        (if (zero? v)
+          e
+          (* m (Math/log (/ m v)))))
+      (> e (* (double (/ 1 30)) (Integer/toUnsignedLong -1)))
+      (* (Math/pow -2.0 32)
+         (Math/log (- 1 (/ e (Integer/toUnsignedLong -1)))))
+      :else
+      e)))
+
+(defn- build-sub-query [index-snapshot {:keys [query-cache unique-counts] :as db} where in in-args rule-name->rules stats]
   ;; NOTE: this implies argument sets with different vars get compiled
   ;; differently.
   (let [encode-value-fn (partial db/encode-value index-snapshot)
+        stats (with-meta stats {:unique-counts (fn [type a]
+                                                 (let [hll (get-in (swap! unique-counts update-in [type a]
+                                                                          (fn [cs]
+                                                                            (if cs
+                                                                              cs
+                                                                              (let [xs (for [x (case type
+                                                                                                 :e (db/ae index-snapshot a nil)
+                                                                                                 :v (db/av index-snapshot a nil))]
+                                                                                         (mem/buffer->hex x))
+                                                                                    hll (reduce
+                                                                                         hyper-log-log-update
+                                                                                         (->hyper-log-log)
+                                                                                         xs)]
+                                                                                (log/info :hll-estimate
+                                                                                          [type a]
+                                                                                          (hyper-log-log-estimate hll)
+                                                                                          (count xs)
+                                                                                          (get stats a 0.0))
+                                                                                hll))))
+                                                                   [type a])]
+                                                   (hyper-log-log-estimate hll)))})
         {:keys [depth->constraints
                 vars-in-join-order
                 var->range-constraints
@@ -1635,7 +1694,7 @@
         [in in-args] (add-legacy-args q [])]
     (compile-sub-query encode-value-fn where in (rule-name->rules rules) stats)))
 
-(defn query [{:keys [valid-time transact-time document-store index-store index-snapshot] :as db} ^ConformedQuery conformed-q in-args]
+(defn query [{:keys [valid-time transact-time document-store index-store index-snapshot unique-counts] :as db} ^ConformedQuery conformed-q in-args]
   (let [q (.q-normalized conformed-q)
         q-conformed (.q-conformed conformed-q)
         {:keys [find where in rules offset limit order-by full-results?]} q-conformed
@@ -1697,7 +1756,7 @@
                             ^Date valid-time ^Date transact-time
                             ^ScheduledExecutorService interrupt-executor
                             conform-cache query-cache projection-cache
-                            index-snapshot
+                            index-snapshot unique-counts
                             entity-resolver-fn]
   Closeable
   (close [_]
@@ -1838,7 +1897,7 @@
   (print-method it *out*))
 
 (defrecord QueryEngine [^ScheduledExecutorService interrupt-executor document-store
-                        index-store bus
+                        index-store bus unique-counts
                         query-cache conform-cache projection-cache]
   api/DBProvider
   (db [this] (api/db this nil nil))
@@ -1898,4 +1957,6 @@
                                                :required? true
                                                :spec ::sys/pos-int}}}
   [opts]
-  (map->QueryEngine (assoc opts :interrupt-executor (Executors/newSingleThreadScheduledExecutor (cio/thread-factory "crux-query-interrupter")))))
+  (map->QueryEngine (assoc opts
+                           :interrupt-executor (Executors/newSingleThreadScheduledExecutor (cio/thread-factory "crux-query-interrupter"))
+                           :unique-counts (atom {}))))
