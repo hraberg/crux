@@ -1550,27 +1550,33 @@ cz
 (def ^:private ^:const bloom-filter-hashes 2)
 
 (defn ->bloom-filter
-  ([]
+  (^org.agrona.MutableDirectBuffer []
    (->bloom-filter 1024))
-  ([^long size]
-   (java.util.BitSet. size)))
+  (^org.agrona.MutableDirectBuffer [^long size]
+   (mem/allocate-unpooled-buffer (/ size Byte/SIZE))))
 
-(defn bloom-filter-probe ^java.util.BitSet [size x]
-  (let [h (hash x)]
-    (loop [n 0
-           p (java.util.BitSet.)]
-      (if (= bloom-filter-hashes n)
-        p
-        (recur (inc n)
-               (doto p
-                 (.set (long-mod (mix-collection-hash h n) size))))))))
+(defn bloom-filter-add ^org.agrona.MutableDirectBuffer [^org.agrona.MutableDirectBuffer bf x]
+  (let [h (hash x)
+        size (* (.capacity bf) Byte/SIZE)]
+    (dotimes [n bloom-filter-hashes]
+      (let [bit (long-mod (mix-collection-hash h n) size)
+            byte-idx (bit-shift-right bit 3)
+            bit-idx (bit-shift-left 1 (bit-and 0x7 bit))]
+        (.putByte bf byte-idx (unchecked-byte (bit-or (.getByte bf byte-idx) bit-idx)))))
+    bf))
 
-(defn bloom-filter-add ^java.util.BitSet [^java.util.BitSet bf x]
-  (doto bf
-    (.or (bloom-filter-probe (.size bf) x))))
-
-(defn bloom-filter-might-contain? [^java.util.BitSet bf x]
-  (.intersects bf (bloom-filter-probe (.size bf) x)))
+(defn bloom-filter-might-contain? [^org.agrona.MutableDirectBuffer bf x]
+  (let [h (hash x)
+        size (* (.capacity bf) Byte/SIZE)]
+    (loop [n 0]
+      (if (= n bloom-filter-hashes)
+        true
+        (let [bit (long-mod (mix-collection-hash h n) size)
+              byte-idx (bit-shift-right bit 3)
+              bit-idx (bit-shift-left 1 (bit-and 0x7 bit))]
+          (if (pos? (bit-and (.getByte bf byte-idx) bit-idx))
+            (recur (inc n))
+            false))))))
 
 (defn- build-sub-query [index-snapshot {:keys [query-cache unique-counts] :as db} where in in-args rule-name->rules stats]
   ;; NOTE: this implies argument sets with different vars get compiled
