@@ -1502,6 +1502,40 @@
       :else
       e)))
 
+(def ^:private ^:const count-min-d 8)
+
+(defn ->count-min
+  (^org.agrona.MutableDirectBuffer []
+   (let [w (long (Math/pow count-min-d 2.0))
+         d count-min-d]
+     (->count-min (* d w Integer/BYTES))))
+  (^org.agrona.MutableDirectBuffer [^long size]
+   (mem/allocate-unpooled-buffer size)))
+
+(defn count-min-add ^org.agrona.MutableDirectBuffer [^org.agrona.MutableDirectBuffer cm x ^long count]
+  (let [d count-min-d
+        w (/ (.capacity cm) (* d Integer/BYTES))
+        h (hash x)]
+    (dotimes [n d]
+      (let [idx (* (+ (mod (mix-collection-hash h n) w)
+                      (* d n))
+                   Integer/BYTES)]
+        (.putInt cm idx (+ count (.getInt cm idx ByteOrder/BIG_ENDIAN)) ByteOrder/BIG_ENDIAN)))
+    cm))
+
+(defn count-min-estimate ^long [^org.agrona.MutableDirectBuffer cm x]
+  (let [d count-min-d
+        w (/ (.capacity cm) (* d Integer/BYTES))
+        h (hash x)]
+    (loop [n 0
+           estimate Integer/MAX_VALUE]
+      (if (= n d)
+        estimate
+        (let [idx (* (+ (mod (mix-collection-hash h n) w)
+                        (* d n))
+                     Integer/BYTES)]
+          (recur (inc n) (min estimate (.getInt cm idx ByteOrder/BIG_ENDIAN))))))))
+
 (defn- build-sub-query [index-snapshot {:keys [query-cache unique-counts] :as db} where in in-args rule-name->rules stats]
   ;; NOTE: this implies argument sets with different vars get compiled
   ;; differently.
