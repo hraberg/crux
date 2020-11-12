@@ -1536,6 +1536,31 @@
                      Integer/BYTES)]
           (recur (inc n) (min estimate (.getInt cm idx ByteOrder/BIG_ENDIAN))))))))
 
+(def ^:private ^:const bloom-filter-hashes 2)
+
+(defn ->bloom-filter
+  ([]
+   (->bloom-filter 1024))
+  ([^long size]
+   (java.util.BitSet. size)))
+
+(defn bloom-filter-probe [size x]
+  (let [h (hash x)]
+    (loop [n 0
+           p (java.util.BitSet.)]
+      (if (= bloom-filter-hashes n)
+        p
+        (recur (inc n)
+               (doto p
+                 (.set (long (mod (mix-collection-hash h n) size)))))))))
+
+(defn bloom-filter-add ^java.util.BitSet [^java.util.BitSet bs x]
+  (doto bs
+    (.or (bloom-filter-probe (.size bs) x))))
+
+(defn bloom-filter-might-contain? [^java.util.BitSet bs x]
+  (.intersects bs (bloom-filter-probe (.size bs) x)))
+
 (defn- build-sub-query [index-snapshot {:keys [query-cache unique-counts] :as db} where in in-args rule-name->rules stats]
   ;; NOTE: this implies argument sets with different vars get compiled
   ;; differently.
