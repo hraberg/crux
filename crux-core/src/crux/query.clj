@@ -1544,7 +1544,7 @@
   ([^long size]
    (java.util.BitSet. size)))
 
-(defn bloom-filter-probe [size x]
+(defn bloom-filter-probe ^java.util.BitSet [size x]
   (let [h (hash x)]
     (loop [n 0
            p (java.util.BitSet.)]
@@ -1554,12 +1554,12 @@
                (doto p
                  (.set (long (mod (mix-collection-hash h n) size)))))))))
 
-(defn bloom-filter-add ^java.util.BitSet [^java.util.BitSet bs x]
-  (doto bs
-    (.or (bloom-filter-probe (.size bs) x))))
+(defn bloom-filter-add ^java.util.BitSet [^java.util.BitSet bf x]
+  (doto bf
+    (.or (bloom-filter-probe (.size bf) x))))
 
-(defn bloom-filter-might-contain? [^java.util.BitSet bs x]
-  (.intersects bs (bloom-filter-probe (.size bs) x)))
+(defn bloom-filter-might-contain? [^java.util.BitSet bf x]
+  (.intersects bf (bloom-filter-probe (.size bf) x)))
 
 (defn- build-sub-query [index-snapshot {:keys [query-cache unique-counts] :as db} where in in-args rule-name->rules stats]
   ;; NOTE: this implies argument sets with different vars get compiled
