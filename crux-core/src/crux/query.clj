@@ -1506,8 +1506,10 @@
 
 (defn ->count-min
   (^org.agrona.MutableDirectBuffer []
-   (let [w (long (Math/pow count-min-d 2.0))
-         d count-min-d]
+   (let [w 128
+         d count-min-d
+         epsilon (/ 2.0 w)
+         confidence (- 1 (/ 1 (Math/pow 2.0 d)))]
      (->count-min (* d w Integer/BYTES))))
   (^org.agrona.MutableDirectBuffer [^long size]
    (mem/allocate-unpooled-buffer size)))
@@ -2035,3 +2037,4 @@
   (map->QueryEngine (assoc opts
                            :interrupt-executor (Executors/newSingleThreadScheduledExecutor (cio/thread-factory "crux-query-interrupter"))
                            :unique-counts (atom {}))))
+(- 1 (/ 1 (Math/pow 2.0 d)))
