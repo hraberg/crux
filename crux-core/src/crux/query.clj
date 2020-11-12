@@ -1468,10 +1468,10 @@
         w (bit-and x (dec (bit-shift-left 1 (- Integer/SIZE b))))]
     (doto hll
       (.putInt (* j Integer/BYTES)
-               (max (.getInt hll (* j Integer/BYTES) ByteOrder/BIG_ENDIAN)
+               (max (.getInt hll (* j Integer/BYTES) java.nio.ByteOrder/BIG_ENDIAN)
                     (- (inc (Integer/numberOfLeadingZeros w)) b))
 
-               ByteOrder/BIG_ENDIAN))))
+               java.nio.ByteOrder/BIG_ENDIAN))))
 
 (defn hyper-log-log-estimate ^double [^org.agrona.DirectBuffer hll]
   (let [m (/ (.capacity hll) Integer/BYTES)
@@ -1479,7 +1479,7 @@
                                 acc 0.0]
                            (if (< n (.capacity hll))
                              (recur (+ n Integer/BYTES)
-                                    (+ acc (Math/pow 2.0 (- (.getInt hll n ByteOrder/BIG_ENDIAN)))))
+                                    (+ acc (Math/pow 2.0 (- (.getInt hll n java.nio.ByteOrder/BIG_ENDIAN)))))
                              acc))))
         am (/ 0.7213 (inc (/ 1.079 m)))
         e (* am (Math/pow m 2.0) z)]
@@ -1489,7 +1489,7 @@
                            acc 0]
                            (if (< n (.capacity hll))
                              (recur (+ n Integer/BYTES)
-                                    (+ acc (if (zero? (.getInt hll n ByteOrder/BIG_ENDIAN))
+                                    (+ acc (if (zero? (.getInt hll n java.nio.ByteOrder/BIG_ENDIAN))
                                              1
                                              0)))
                              acc)))]
@@ -1514,17 +1514,26 @@
   (^org.agrona.MutableDirectBuffer [^long size]
    (mem/allocate-unpooled-buffer size)))
 
-(defn count-min-add ^org.agrona.MutableDirectBuffer [^org.agrona.MutableDirectBuffer cm x ^long count]
-  (let [d count-min-d
-        w (/ (.capacity cm) (* d Integer/BYTES))
-        h (hash x)]
-    (dotimes [n d]
-      (let [idx (* (+ (mod (mix-collection-hash h n) w)
-                      (* d n))
-                   Integer/BYTES)]
-        (.putInt cm idx (+ count (.getInt cm idx ByteOrder/BIG_ENDIAN)) ByteOrder/BIG_ENDIAN)))
-    cm))
+(defn- long-mod ^long [^long num ^long div]
+  (let [m (rem num div)]
+    (if (or (zero? m) (= (pos? num) (pos? div)))
+      m
+      (+ m div))))
 
+(defn count-min-add
+  (^org.agrona.MutableDirectBuffer [^org.agrona.MutableDirectBuffer cm x]
+   (count-min-add cm x 1))
+  (^org.agrona.MutableDirectBuffer [^org.agrona.MutableDirectBuffer cm x ^long count]
+   (let [d count-min-d
+         w (/ (.capacity cm) (* d Integer/BYTES))
+         h (hash x)]
+     (dotimes [n d]
+       (let [idx (* (+ (long-mod (mix-collection-hash h n) w)
+                       (* d n))
+                    Integer/BYTES)]
+         (.putInt cm idx (+ count (.getInt cm idx java.nio.ByteOrder/BIG_ENDIAN)) java.nio.ByteOrder/BIG_ENDIAN)))
+     cm)))
+cz
 (defn count-min-estimate ^long [^org.agrona.MutableDirectBuffer cm x]
   (let [d count-min-d
         w (/ (.capacity cm) (* d Integer/BYTES))
@@ -1533,10 +1542,10 @@
            estimate Integer/MAX_VALUE]
       (if (= n d)
         estimate
-        (let [idx (* (+ (mod (mix-collection-hash h n) w)
+        (let [idx (* (+ (long-mod (mix-collection-hash h n) w)
                         (* d n))
                      Integer/BYTES)]
-          (recur (inc n) (min estimate (.getInt cm idx ByteOrder/BIG_ENDIAN))))))))
+          (recur (inc n) (min estimate (.getInt cm idx java.nio.ByteOrder/BIG_ENDIAN))))))))
 
 (def ^:private ^:const bloom-filter-hashes 2)
 
@@ -1554,7 +1563,7 @@
         p
         (recur (inc n)
                (doto p
-                 (.set (long (mod (mix-collection-hash h n) size)))))))))
+                 (.set (long-mod (mix-collection-hash h n) size))))))))
 
 (defn bloom-filter-add ^java.util.BitSet [^java.util.BitSet bf x]
   (doto bf
