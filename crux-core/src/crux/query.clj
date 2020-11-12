@@ -25,6 +25,7 @@
            crux.codec.EntityTx
            crux.index.IndexStoreIndexState
            (java.io Closeable Writer)
+           java.nio.ByteOrder
            (java.util Collection Comparator Date List UUID)
            (java.util.concurrent Future Executors ScheduledExecutorService TimeoutException TimeUnit)))
 
@@ -1453,30 +1454,45 @@
     compiled-query))
 
 ;; http://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf
-(defn- ->hyper-log-log
-  (^ints []
+(defn ->hyper-log-log
+  (^org.agrona.MutableDirectBuffer []
    (->hyper-log-log 1024))
-  (^ints [^long m]
-   (int-array m)))
+  (^org.agrona.MutableDirectBuffer [^long m]
+   (mem/allocate-unpooled-buffer (* Integer/BYTES m))))
 
-(defn- hyper-log-log-update ^ints [^ints hll v]
-  (let [m (alength hll)
+(defn hyper-log-log-update ^org.agrona.MutableDirectBuffer [^org.agrona.MutableDirectBuffer hll v]
+  (let [m (/ (.capacity hll) Integer/BYTES)
         b (Integer/numberOfTrailingZeros m)
         x (long (hash v))
         j (bit-and (bit-shift-right x (- Integer/SIZE b)) (dec m))
         w (bit-and x (dec (bit-shift-left 1 (- Integer/SIZE b))))]
     (doto hll
-      (aset j (max (aget hll j)
-                   (- (inc (Integer/numberOfLeadingZeros w)) b))))))
+      (.putInt (* j Integer/BYTES)
+               (max (.getInt hll (* j Integer/BYTES) ByteOrder/BIG_ENDIAN)
+                    (- (inc (Integer/numberOfLeadingZeros w)) b))
 
-(defn- hyper-log-log-estimate ^double [^ints hll]
-  (let [m (alength hll)
-        z (/ 1.0 (double (areduce hll n acc 0.0 (+ acc (Math/pow 2.0 (- (aget hll n)))))))
+               ByteOrder/BIG_ENDIAN))))
+
+(defn hyper-log-log-estimate ^double [^org.agrona.DirectBuffer hll]
+  (let [m (/ (.capacity hll) Integer/BYTES)
+        z (/ 1.0 (double (loop [n 0
+                                acc 0.0]
+                           (if (< n (.capacity hll))
+                             (recur (+ n Integer/BYTES)
+                                    (+ acc (Math/pow 2.0 (- (.getInt hll n ByteOrder/BIG_ENDIAN)))))
+                             acc))))
         am (/ 0.7213 (inc (/ 1.079 m)))
         e (* am (Math/pow m 2.0) z)]
     (cond
       (<= e (* (double (/ 5 2)) m))
-      (let [v (long (areduce hll n acc 0 (+ acc (if (zero? (aget hll n)) 1 0))))]
+      (let [v (long (loop [n 0
+                           acc 0]
+                           (if (< n (.capacity hll))
+                             (recur (+ n Integer/BYTES)
+                                    (+ acc (if (zero? (.getInt hll n ByteOrder/BIG_ENDIAN))
+                                             1
+                                             0)))
+                             acc)))]
         (if (zero? v)
           e
           (* m (Math/log (/ m v)))))
