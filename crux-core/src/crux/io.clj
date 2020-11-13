@@ -290,16 +290,17 @@
 (def ^:private ^:const M_ARENA_MAX -8)
 (def malloc-arena-max (atom (System/getenv "MALLOC_ARENA_MAX")))
 
-(defn glibc? []
-  (if (jnr-available?)
-    (try
-      (let [^GLibC glibc (eval `(.load (jnr.ffi.LibraryLoader/create GLibC) "c"))
-            glibc-version (.gnu_get_libc_version glibc)]
-        true)
-      (catch UnsatisfiedLinkError e
-        (log/debug "Could not call glibc gnu_get_libc_version")
-        false))
-    false))
+(def glibc? (memoize
+             (fn []
+               (if (jnr-available?)
+                 (try
+                   (let [^GLibC glibc (eval `(.load (jnr.ffi.LibraryLoader/create GLibC) "c"))
+                         glibc-version (.gnu_get_libc_version glibc)]
+                     true)
+                   (catch UnsatisfiedLinkError e
+                     (log/debug "Could not call glibc gnu_get_libc_version")
+                     false))
+                 false))))
 
 (defn try-set-malloc-arena-max [^long m-arena-max]
   (when (and (nil? @malloc-arena-max)
