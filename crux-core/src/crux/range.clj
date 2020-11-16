@@ -7,6 +7,12 @@
   (:require [clojure.string :as str]
             [crux.memory :as mem]))
 
+;; "Adaptive Range Filters for Cold Data: Avoiding Trips to Siberia"
+;; http://www.vldb.org/pvldb/vol6/p1714-kossmann.pdf
+
+;; "SuRF: Practical Range Query Filtering with Fast Succinct Tries"
+;; https://www.cs.cmu.edu/~pavlo/papers/mod601-zhangA-hm.pdf
+
 (defn buffer->long ^long [^DirectBuffer b]
   (if (>= (.capacity b) Long/BYTES)
     (.getLong b 0 ByteOrder/BIG_ENDIAN)
