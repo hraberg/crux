@@ -56,7 +56,7 @@
 (defn ->fs []
   (FilteredSet. (TreeSet.) (Roaring64NavigableMap.)))
 
-(defn fs-add ^crux.memory.FilteredSet [^FilteredSet fs k]
+(defn fs-add ^crux.range.FilteredSet [^FilteredSet fs k]
   (.add ^NavigableSet (.s fs) k)
   (insert-key (.bm fs) (buffer->long (mem/as-buffer (.getBytes (str k) StandardCharsets/UTF_8))))
   fs)
