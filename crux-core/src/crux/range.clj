@@ -46,8 +46,16 @@
 (defn range-may-contain? [^Roaring64Bitmap bm ^long k]
   (even? (.rankLong bm k)))
 
+(defn insert-key ^org.roaringbitmap.longlong.Roaring64Bitmap [^Roaring64Bitmap bm ^long k]
+  (if (range-may-contain? bm k)
+    bm
+    (doto bm
+      (.flip k)
+      (.flip (unchecked-inc k)))))
+
 (defn insert-empty-range ^org.roaringbitmap.longlong.Roaring64Bitmap [^Roaring64Bitmap bm ^long start ^long end]
-  (if (and (.contains bm end) (not (range-may-contain? bm start)))
+  (if (or (and (.contains bm end) (not (range-may-contain? bm start)))
+          (= start end))
     bm
     (do (dotimes [n (- (.rankLong bm end) (.rankLong bm start))]
           (when (< n (.getLongCardinality bm))
@@ -58,13 +66,6 @@
         (doto bm
           (.addLong start)
           (.addLong end)))))
-
-(defn insert-key ^org.roaringbitmap.longlong.Roaring64Bitmap [^Roaring64Bitmap bm ^long k]
-  (if (range-may-contain? bm k)
-    bm
-    (doto bm
-      (.flip k)
-      (.flip (unchecked-inc k)))))
 
 (deftype FilteredSet [^NavigableSet s ^Roaring64Bitmap bm])
 
@@ -97,43 +98,58 @@
        (= k (fs-seek fs k))))
 
 (comment
-  (let [fs ^FilteredSet (reduce fs-add
-                                (->fs)
-                                (->>  ["f"
-                                       "far"
-                                       "fast"
-                                       "s"
-                                       "top"
-                                       "toy"
-                                       "trie"]
-                                      (mapv c/->value-buffer)))]
-    (assert (= "f" (c/decode-value-buffer (fs-seek fs (c/->value-buffer "a")))))
-    (assert (= [604327874509406208 605735249392959488]
-               (iterator-seq (.iterator ^Roaring64Bitmap (.bm fs)))))
-    (assert (= "f" (c/decode-value-buffer (fs-seek fs (c/->value-buffer "b")))))
-    (assert (= [604327874509406208 605735249392959488]
-               (iterator-seq (.iterator ^Roaring64Bitmap (.bm fs)))))
-    (fs-add fs (c/->value-buffer "c"))
-    (fs-add fs (c/->value-buffer "g"))
-    (assert (true? (fs-contains? fs (c/->value-buffer "c"))))
-    (assert (= [604327874509406208 604890824462827520
-                604890824462827521 605735249392959488]
-               (iterator-seq (.iterator ^Roaring64Bitmap (.bm fs)))))
-    (assert (= "top" (c/decode-value-buffer (fs-seek fs (c/->value-buffer "t")))))
-    (assert (= "top" (c/decode-value-buffer (fs-seek fs (c/->value-buffer "to")))))
-    (assert (false? (fs-contains? fs (c/->value-buffer "too"))))
-    (assert (true? (fs-contains? fs (c/->value-buffer "toy"))))
-    (= [604327874509406208 604890824462827520
-        604890824462827521 605735249392959488
-        609675899066908672 609799534012268544]
-       (iterator-seq (.iterator ^Roaring64Bitmap (.bm fs))))
+  (do (let [fs ^FilteredSet (reduce fs-add
+                                    (->fs)
+                                    (->>  ["f"
+                                           "far"
+                                           "fast"
+                                           "s"
+                                           "top"
+                                           "toy"
+                                           "trie"]
+                                          (mapv c/->value-buffer)))]
+        (assert (= "f" (c/decode-value-buffer (fs-seek fs (c/->value-buffer "a")))))
+        (assert (= [604327874509406208 605735249392959488] ;; "a" "f"
+                   (vec (.toArray ^Roaring64Bitmap (.bm fs)))))
+        (assert (= "f" (c/decode-value-buffer (fs-seek fs (c/->value-buffer "b")))))
+        (assert (= [604327874509406208 605735249392959488]
+                   (vec (.toArray ^Roaring64Bitmap (.bm fs)))))
+        (fs-add fs (c/->value-buffer "c"))
+        (fs-add fs (c/->value-buffer "g"))
+        (assert (true? (fs-contains? fs (c/->value-buffer "c"))))
+        (assert (= [604327874509406208 604890824462827520 ;; "a" "c"
+                    604890824462827521 605735249392959488] ;; (unchecked-inc "c") "f"
+                   (vec (.toArray ^Roaring64Bitmap (.bm fs)))))
+        (assert (= "top" (c/decode-value-buffer (fs-seek fs (c/->value-buffer "t")))))
+        (assert (= "top" (c/decode-value-buffer (fs-seek fs (c/->value-buffer "to")))))
+        (assert (false? (fs-contains? fs (c/->value-buffer "too"))))
+        (assert (true? (fs-contains? fs (c/->value-buffer "toy"))))
+        (assert (= [604327874509406208 604890824462827520 ;; "a" "c"
+                    604890824462827521 605735249392959488 ;; (unchecked-inc "c") "f"
+                    609675899066908672 609799534012268544]  ;; "t "top"
+                   (vec (.toArray ^Roaring64Bitmap (.bm fs)))))
 
-    (assert (= ["c",
-                "f"
-                "far"
-                "fast"
-                "g"
-                "s"
-                "top"
-                "toy"
-                "trie"] (mapv c/decode-value-buffer (.s fs))))))
+        (assert (= ["c"
+                    "f"
+                    "far"
+                    "fast"
+                    "g"
+                    "s"
+                    "top"
+                    "toy"
+                    "trie"] (mapv c/decode-value-buffer (.s fs)))))
+
+      (let [fs ^FilteredSet (reduce fs-add
+                                    (->fs)
+                                    (->>  [1 2 3 5 6 11]
+                                          (mapv c/->value-buffer)))]
+        (assert (= 11 (c/decode-value-buffer (fs-seek fs (c/->value-buffer 8)))))
+        (assert (empty? (vec (.toArray ^Roaring64Bitmap (.bm fs))))))
+
+      (let [fs ^FilteredSet (reduce fs-add
+                                    (->fs)
+                                    (->>  ["01" "02" "03" "05" "06" "11"]
+                                          (mapv c/->value-buffer)))]
+        (assert (= "11" (c/decode-value-buffer (fs-seek fs (c/->value-buffer "08")))))
+        (assert (= [590598277108334592 590872055503650816] ;; "08" "11"
+                   (vec (.toArray ^Roaring64Bitmap (.bm fs))))))))
