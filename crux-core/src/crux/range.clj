@@ -86,11 +86,13 @@
 
 (defn fs-seek ^org.agrona.DirectBuffer [^FilteredSet fs ^DirectBuffer k]
   (when-let [k-probe (fs-seek-potential-k fs k)]
-    (when-let [found (.ceiling ^NavigableSet (.s fs) k-probe)]
+    (let [found (.ceiling ^NavigableSet (.s fs) k-probe)]
       (when-not (= k found)
         (insert-empty-range (.bm fs)
                             (buffer->long k)
-                            (buffer->long found)))
+                            (if (nil? found)
+                              -1
+                              (buffer->long found))))
       found)))
 
 (defn fs-contains? [^FilteredSet fs ^DirectBuffer k]
@@ -152,4 +154,9 @@
                                           (mapv c/->value-buffer)))]
         (assert (= "11" (c/decode-value-buffer (fs-seek fs (c/->value-buffer "08")))))
         (assert (= [590598277108334592 590872055503650816] ;; "08" "11"
+                   (vec (.toArray ^Roaring64Bitmap (.bm fs)))))
+        (assert (nil? (fs-seek fs (c/->value-buffer "12"))))
+        (prn (vec (.toArray ^Roaring64Bitmap (.bm fs))))
+        (assert (= [590598277108334592 590872055503650816  ;; "08" "11"
+                    590873155015278592 -1] ;; "12" -1
                    (vec (.toArray ^Roaring64Bitmap (.bm fs))))))))
