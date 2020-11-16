@@ -27,8 +27,16 @@
                (bit-or acc (bit-shift-left (.getByte b n) shift)))))))
 
 (defn long->buffer ^org.agrona.DirectBuffer [^long x]
-  (doto ^MutableDirectBuffer (mem/allocate-buffer Long/BYTES)
-    (.putLong 0 x ByteOrder/BIG_ENDIAN)))
+  (let [b (doto ^MutableDirectBuffer (mem/allocate-buffer Long/BYTES)
+            (.putLong 0 x ByteOrder/BIG_ENDIAN))]
+    (loop [n Long/BYTES]
+      (cond
+        (zero? n)
+        b
+        (not (zero? (.getByte b (dec n))))
+        (mem/limit-buffer b n)
+        :else
+        (recur (dec n))))))
 
 (defn seek-bitmap [^Roaring64Bitmap bm ^long k]
   (let [rank (.rankLong bm k)]
@@ -73,19 +81,11 @@
     (if (range-may-contain? (.bm fs) k-long)
       k
       (when-let [next-k (seek-bitmap (.bm fs) k-long)]
-        (let [next-k-buffer ^DirectBuffer (long->buffer next-k)]
-          (loop [n Long/BYTES]
-            (cond
-              (zero? n)
-              next-k-buffer
-              (not (zero? (.getByte next-k-buffer (dec n))))
-              (mem/limit-buffer next-k-buffer n)
-              :else
-              (recur (dec n)))))))))
+        (long->buffer next-k)))))
 
 (defn fs-seek ^org.agrona.DirectBuffer [^FilteredSet fs ^DirectBuffer k]
   (when-let [k-probe (fs-seek-potential-k fs k)]
-    (when-let [found (first (.tailSet ^NavigableSet (.s fs) k-probe))]
+    (when-let [found (.ceiling ^NavigableSet (.s fs) k-probe)]
       (when-not (= k found)
         (insert-empty-range (.bm fs)
                             (buffer->long k)
