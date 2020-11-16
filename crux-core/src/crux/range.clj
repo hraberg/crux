@@ -38,13 +38,13 @@
         :else
         (recur (dec n))))))
 
-(defn seek-bitmap [^Roaring64Bitmap bm ^long k]
+(defn seek-higher [^Roaring64Bitmap bm ^long k]
   (let [rank (.rankLong bm k)]
     (when (< rank (.getLongCardinality bm))
       (.select bm rank))))
 
-(defn range-may-contain? [^Roaring64Bitmap bm ^long probe]
-  (even? (.rankLong bm probe)))
+(defn range-may-contain? [^Roaring64Bitmap bm ^long k]
+  (even? (.rankLong bm k)))
 
 (defn insert-empty-range ^org.roaringbitmap.longlong.Roaring64Bitmap [^Roaring64Bitmap bm ^long start ^long end]
   (if (and (.contains bm end) (not (range-may-contain? bm start)))
@@ -80,7 +80,7 @@
   (let [k-long (buffer->long k)]
     (if (range-may-contain? (.bm fs) k-long)
       k
-      (when-let [next-k (seek-bitmap (.bm fs) k-long)]
+      (when-let [next-k (seek-higher (.bm fs) k-long)]
         (long->buffer next-k)))))
 
 (defn fs-seek ^org.agrona.DirectBuffer [^FilteredSet fs ^DirectBuffer k]
@@ -93,9 +93,8 @@
       found)))
 
 (defn fs-contains? [^FilteredSet fs ^DirectBuffer k]
-  (let [k-long (buffer->long k)]
-    (and (range-may-contain? (.bm fs) k-long)
-         (= k (fs-seek fs k)))))
+  (and (range-may-contain? (.bm fs) (buffer->long k))
+       (= k (fs-seek fs k))))
 
 (comment
   (let [fs ^FilteredSet (reduce fs-add
