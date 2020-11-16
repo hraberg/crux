@@ -74,16 +74,14 @@
       k
       (when-let [next-k (seek-bitmap (.bm fs) k-long)]
         (let [next-k-buffer ^DirectBuffer (long->buffer next-k)]
-          (if (= @#'c/string-value-type-id (.getByte next-k-buffer 0))
-            (loop [n 0]
-              (cond
-                (= n Long/BYTES)
-                next-k-buffer
-                (= @#'c/string-terminate-mark (.getByte next-k-buffer n))
-                (mem/limit-buffer next-k-buffer (inc n))
-                :else
-                (recur (inc n))))
-            next-k-buffer))))))
+          (loop [n Long/BYTES]
+            (cond
+              (zero? n)
+              next-k-buffer
+              (not (zero? (.getByte next-k-buffer (dec n))))
+              (mem/limit-buffer next-k-buffer n)
+              :else
+              (recur (dec n)))))))))
 
 (defn fs-seek ^org.agrona.DirectBuffer [^FilteredSet fs ^DirectBuffer k]
   (when-let [k-probe (fs-seek-potential-k fs k)]
