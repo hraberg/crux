@@ -160,3 +160,81 @@
         (assert (= [590598277108334592 590872055503650816  ;; "08" "11"
                     590873155015278592 -1] ;; "12" -1
                    (vec (.toArray ^Roaring64Bitmap (.bm fs))))))))
+
+;; Succinct tree spikes, not used by the above code.
+
+(deftype LOUDS [^Roaring64Bitmap tree labels])
+
+(defn build-louds ^org.roaringbitmap.longlong.Roaring64Bitmap [^String bits labels]
+  (->LOUDS
+   (reduce
+    (fn [^Roaring64Bitmap acc [n x]]
+      (when (= \1 x)
+        (.addLong acc n))
+      acc)
+    (Roaring64Bitmap.)
+    (map-indexed vector (str/replace bits #"\s+" "")))
+   labels))
+
+(defn rank-0 ^long [^Roaring64Bitmap bm ^long i]
+  (unchecked-subtract (unchecked-inc i) (.rankLong bm i)))
+
+(defn rank-1 ^long [^Roaring64Bitmap bm ^long i]
+  (.rankLong bm i))
+
+(defn select-0 ^long [^Roaring64Bitmap bm ^long i]
+  (loop [n 0
+         acc 0]
+    (if (= acc i)
+      n
+      (recur (unchecked-inc n)
+             (if-not (.contains bm n)
+               (unchecked-inc acc)
+               acc)))))
+
+(defn select-1 ^long [^Roaring64Bitmap bm ^long i]
+  (.select bm i))
+
+;; SuRF paper
+
+;; Position of the i-th node = select 0 (i) + 1
+(defn louds-node ^long [^LOUDS louds ^long i]
+  (unchecked-inc (select-0 (.tree louds) i)))
+
+(defn louds-label [^LOUDS louds ^long i]
+  (nth (.labels louds) (unchecked-dec (rank-0 (.tree louds) (unchecked-inc i)))))
+
+;; Position of the k-th child of the node started at p = select 0 (rank 1 (p + k)) + 1
+(defn louds-child ^long [^LOUDS louds ^long p ^long k]
+  (unchecked-inc (select-0 (.tree louds) (rank-1 (.tree louds) (unchecked-add p k)))))
+
+;; Position of the parent of the node started at p = select 1 (rank 0 (p))
+(defn louds-parent ^long [^LOUDS louds ^long p]
+  (select-1 (.tree louds) (rank-0 (.tree louds) p)))
+
+;; http://www-erato.ist.hokudai.ac.jp/alsip2012/docs/tutorial.pdf
+
+(defn louds-node ^long [^LOUDS louds ^long i]
+  (select-1 (.tree louds) (unchecked-inc i)))
+
+(defn louds-child ^long [^LOUDS louds ^long x ^long i]
+  (unchecked-add (select-0 (.tree louds) (rank-1 (.tree louds) x)) i))
+
+(defn louds-parent ^long [^LOUDS louds ^long x]
+  (select-1 (.tree louds) (unchecked-dec (rank-0 (.tree louds) x)))
+  #_(select-1 (.tree louds) (rank-0 (.tree louds) x)))
+
+(comment
+  (let [louds (build-louds
+               "110 10 110 1110 110 110 0 10 0 0 0 10 0 0 0"
+               ["0" "1" "2" "3" "4" "5" "6" "7" "8" "9" "A" "B" "C" "D" "E"])]
+    (louds-label louds (louds-child louds 0 1)))
+
+  (let [louds ^LOUDS (build-louds "10 110 10 110 0 110 10 0 0 0"
+                                  ["1" "2" "3" "4" "5" "6" "7" "8" "9"])]
+    (louds-child louds 4 2)
+    (louds-parent louds 14)
+    (louds-node louds 3)
+    (louds-node louds 8)
+    #_(louds-node louds 3)
+    #_(+ (select-0 (.tree louds) (rank-1 (.tree louds) 4)) 2)))
