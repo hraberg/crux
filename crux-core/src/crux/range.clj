@@ -1,6 +1,7 @@
 (ns crux.range
   (:import [org.agrona DirectBuffer MutableDirectBuffer]
            org.roaringbitmap.longlong.Roaring64Bitmap
+           clojure.lang.PersistentQueue
            java.nio.ByteOrder
            java.nio.charset.StandardCharsets
            [java.util NavigableSet TreeSet])
@@ -165,16 +166,35 @@
 
 (deftype LOUDS [^Roaring64Bitmap tree labels])
 
-(defn build-louds ^org.roaringbitmap.longlong.Roaring64Bitmap [^String bits labels]
-  (->LOUDS
-   (reduce
-    (fn [^Roaring64Bitmap acc [n x]]
-      (when (= \1 x)
-        (.addLong acc n))
-      acc)
-    (Roaring64Bitmap.)
-    (map-indexed vector (str/replace bits #"\s+" "")))
-   labels))
+(defn str->bitmap ^org.roaringbitmap.longlong.Roaring64Bitmap [^String bits]
+  (reduce
+   (fn [^Roaring64Bitmap acc [n x]]
+     (when (= \1 x)
+       (.addLong acc n))
+     acc)
+   (Roaring64Bitmap.)
+   (map-indexed vector (str/replace bits #"\s+" ""))))
+
+(defn str->louds ^crux.range.LOUDS [^String bits labels]
+  (->LOUDS (str->bitmap bits) labels))
+
+(defn tree->louds ^crux.range.LOUDS [tree]
+  (loop [stack (conj PersistentQueue/EMPTY tree)
+         labels []
+         bits (doto (Roaring64Bitmap.)
+                (.addLong 0))
+         bit-offset 2]
+    (if (empty? stack)
+      (->LOUDS bits labels)
+      (let [[node & children] (peek stack)]
+        (recur
+         (into (pop stack) children)
+         (conj labels node)
+         (if (zero? (count children))
+           bits
+           (doto bits
+             (.add bit-offset (+ bit-offset (count children)))))
+         (+ bit-offset (inc (count children))))))))
 
 (defn rank-0 ^long [^Roaring64Bitmap bm ^long i]
   (unchecked-subtract (unchecked-inc i) (.rankLong bm i)))
@@ -242,8 +262,15 @@
   (select-1 (.tree louds) (unchecked-dec (rank-0 (.tree louds) x))))
 
 (comment
-  (let [louds ^LOUDS (build-louds "10 110 10 110 0 110 10 0 0 0"
-                                  ["1" "2" "3" "4" "5" "6" "7" "8" "9"])]
+  (let [louds ^LOUDS (tree->louds ["1"
+                                   ["2"
+                                    ["4"]]
+                                   ["3"
+                                    ["5"
+                                     ["7"]
+                                     ["8"]]
+                                    ["6"
+                                     ["9"]]]])]
     (assert (= 8 (louds-child louds (louds-child louds 0 1) 1)))
     (assert (= 12 (louds-child louds (louds-child louds (louds-child louds 0 1) 0) 1)))
     (assert (= 3 (louds-parent louds (louds-child louds (louds-child louds 0 1) 1))))
