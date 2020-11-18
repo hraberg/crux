@@ -183,14 +183,27 @@
   (.rankLong bm i))
 
 (defn select-0 ^long [^Roaring64Bitmap bm ^long i]
-  (loop [n 0
-         acc 0]
-    (let [acc (if-not (.contains bm n)
-                (unchecked-inc acc)
-                acc)]
-      (if (= acc (inc i))
-        n
-        (recur (unchecked-inc n) acc)))))
+  (let [highest-bit (.select bm (unchecked-dec (.getLongCardinality bm)))
+        zereos-in-range (unchecked-subtract highest-bit (unchecked-dec (.getLongCardinality bm)))
+        needed-zereos (unchecked-inc i)]
+    (if (neg? (Long/compareUnsigned zereos-in-range needed-zereos))
+      (unchecked-add highest-bit (unchecked-subtract needed-zereos zereos-in-range))
+      (loop [low 0
+             high highest-bit]
+        (let [mid (unsigned-bit-shift-right (unchecked-add low high) 1)
+              zeroes (rank-0 bm mid)]
+          (cond
+            (= zeroes needed-zereos)
+            (loop [n mid]
+              (if (.contains bm n)
+                (recur (unchecked-dec n))
+                n))
+
+            (pos? (Long/compareUnsigned needed-zereos zeroes))
+            (recur (unchecked-inc mid) high)
+
+            :else
+            (recur low (unchecked-dec mid))))))))
 
 (defn select-1 ^long [^Roaring64Bitmap bm ^long i]
   (.select bm i))
