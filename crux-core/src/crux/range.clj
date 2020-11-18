@@ -24,7 +24,7 @@
         acc
         (recur (inc n)
                (- shift Byte/SIZE)
-               (bit-or acc (bit-shift-left (.getByte b n) shift)))))))
+               (bit-or acc (bit-shift-left (Byte/toUnsignedLong (.getByte b n)) shift)))))))
 
 (defn long->buffer ^org.agrona.DirectBuffer [^long x]
   (let [b (doto ^MutableDirectBuffer (mem/allocate-buffer Long/BYTES)
@@ -146,7 +146,8 @@
                                     (->>  [1 2 3 5 6 11]
                                           (mapv c/->value-buffer)))]
         (assert (= 11 (c/decode-value-buffer (fs-seek fs (c/->value-buffer 8)))))
-        (assert (empty? (vec (.toArray ^Roaring64Bitmap (.bm fs))))))
+        (assert (= [397583404603801600 397636181161934848]
+                   (vec (.toArray ^Roaring64Bitmap (.bm fs))))))
 
       (let [fs ^FilteredSet (reduce fs-add
                                     (->fs)
@@ -156,7 +157,6 @@
         (assert (= [590598277108334592 590872055503650816] ;; "08" "11"
                    (vec (.toArray ^Roaring64Bitmap (.bm fs)))))
         (assert (nil? (fs-seek fs (c/->value-buffer "12"))))
-        (prn (vec (.toArray ^Roaring64Bitmap (.bm fs))))
         (assert (= [590598277108334592 590872055503650816  ;; "08" "11"
                     590873155015278592 -1] ;; "12" -1
                    (vec (.toArray ^Roaring64Bitmap (.bm fs))))))))
