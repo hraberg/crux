@@ -20,7 +20,7 @@
 ;; Indexes
 
 ;; NOTE: Must be updated when existing indexes change structure.
-(def index-version 15)
+(def index-version 16)
 (def ^:const index-version-size Long/BYTES)
 
 (def ^:const index-id-size Byte/BYTES)
@@ -76,7 +76,7 @@
 (def ^:private clob-value-type-id 2)
 (def ^:private nil-value-type-id 3)
 (def ^:private boolean-value-type-id 4)
-(def ^:private long-value-type-id 5)
+(def ^:private var-int-value-type-id 5)
 (def ^:private double-value-type-id 6)
 (def ^:private date-value-type-id 7)
 (def ^:private string-value-type-id 8)
@@ -178,11 +178,24 @@
 
   Long
   (value->buffer [this ^MutableDirectBuffer to]
-    (mem/limit-buffer
-     (doto to
-       (.putByte 0 long-value-type-id)
-       (.putLong value-type-id-size (bit-xor ^long this Long/MIN_VALUE) ByteOrder/BIG_ENDIAN))
-     (+ value-type-id-size Long/BYTES)))
+    (let [l (long this)
+          bits (- Long/SIZE
+                  (if (neg? l)
+                    (Long/numberOfLeadingZeros (bit-not l))
+                    (Long/numberOfLeadingZeros l)))
+          used-bytes (inc (quot bits Byte/SIZE))
+          header-byte (if (neg? l)
+                        (- Long/SIZE bits)
+                        (bit-or Byte/MIN_VALUE bits))
+          first-long (bit-shift-left l (- Long/SIZE bits))
+          output-bytes (inc used-bytes)
+          header-size Byte/BYTES]
+      (mem/limit-buffer
+       (doto to
+         (.putByte 0 var-int-value-type-id)
+         (.putByte value-type-id-size (unchecked-byte header-byte))
+         (.putLong (+ header-size value-type-id-size) first-long ByteOrder/BIG_ENDIAN))
+       (+ value-type-id-size header-size used-bytes))))
 
   Float
   (value->buffer [this to]
@@ -200,8 +213,11 @@
 
   Date
   (value->buffer [this ^MutableDirectBuffer to]
-    (doto (value->buffer (.getTime this) to)
-      (.putByte 0 (byte date-value-type-id))))
+    (mem/limit-buffer
+     (doto to
+       (.putByte 0 (byte date-value-type-id))
+       (.putLong value-type-id-size (bit-xor (.getTime this) Long/MIN_VALUE) ByteOrder/BIG_ENDIAN))
+     (+ value-type-id-size Long/BYTES)))
 
   Character
   (value->buffer [this ^MutableDirectBuffer to]
@@ -263,13 +279,34 @@
 (defn value-buffer-type-id ^org.agrona.DirectBuffer [^DirectBuffer buffer]
   (mem/limit-buffer buffer value-type-id-size))
 
-(defn- decode-long ^long [^DirectBuffer buffer]
-  (bit-xor (.getLong buffer value-type-id-size  ByteOrder/BIG_ENDIAN) Long/MIN_VALUE))
+(defn- decode-var-int ^long [^DirectBuffer buffer]
+  (let [header-byte (.getByte buffer value-type-id-size)
+        header-size Byte/BYTES
+        bits (bit-and (dec Long/SIZE) header-byte)]
+    (loop [n (+ value-type-id-size header-size)
+           shift (- Long/SIZE Byte/SIZE)
+           acc 0]
+      (if (= n (.capacity buffer))
+        (cond
+          (neg? header-byte)
+          (unsigned-bit-shift-right acc (- Long/SIZE bits))
+
+          (zero? bits)
+          -1
+
+          :else
+          (bit-not (unsigned-bit-shift-right (bit-not acc) bits)))
+        (recur (inc n)
+               (- shift Byte/SIZE)
+               (bit-or acc (bit-shift-left (Byte/toUnsignedLong (.getByte buffer n)) shift)))))))
 
 (defn- decode-double ^double [^DirectBuffer buffer]
   (let [l (dec (.getLong buffer value-type-id-size  ByteOrder/BIG_ENDIAN))
         l (bit-xor l (bit-or (bit-shift-right (bit-not l) (dec Long/SIZE)) Long/MIN_VALUE))]
     (Double/longBitsToDouble l)))
+
+(defn- decode-date ^java.util.Date [^DirectBuffer buffer]
+  (Date. (bit-xor (.getLong buffer value-type-id-size  ByteOrder/BIG_ENDIAN) Long/MIN_VALUE)))
 
 (defn- decode-string ^String [^DirectBuffer buffer]
   (let [offset (byte 2)
@@ -303,9 +340,9 @@
     (case type-id
       3 nil ;; nil-value-type-id
       4 (decode-boolean buffer) ;; boolean-value-type-id
-      5 (decode-long buffer) ;; long-value-type-id
+      5 (decode-var-int buffer) ;; var-int-value-type-id
       6 (decode-double buffer) ;; double-value-type-id
-      7 (Date. (decode-long buffer)) ;; date-value-type-id
+      7 (decode-date buffer) ;; date-value-type-id
       8 (decode-string buffer) ;; string-value-type-id
       9 (decode-char buffer) ;; char-value-type-id
       10 (decode-nippy buffer) ;; nippy-value-type-id
