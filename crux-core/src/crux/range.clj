@@ -185,56 +185,63 @@
 (defn select-0 ^long [^Roaring64Bitmap bm ^long i]
   (loop [n 0
          acc 0]
-    (if (= acc i)
-      n
-      (recur (unchecked-inc n)
-             (if-not (.contains bm n)
-               (unchecked-inc acc)
-               acc)))))
+    (let [acc (if-not (.contains bm n)
+                (unchecked-inc acc)
+                acc)]
+      (if (= acc (inc i))
+        n
+        (recur (unchecked-inc n) acc)))))
 
 (defn select-1 ^long [^Roaring64Bitmap bm ^long i]
   (.select bm i))
 
 ;; SuRF paper
 
-;; Position of the i-th node = select 0 (i) + 1
-(defn louds-node ^long [^LOUDS louds ^long i]
-  (unchecked-inc (select-0 (.tree louds) i)))
+;; ;; Position of the i-th node = select 0 (i) + 1
+;; (defn louds-node ^long [^LOUDS louds ^long i]
+;;   (unchecked-inc (select-0 (.tree louds) i)))
 
-(defn louds-label [^LOUDS louds ^long i]
-  (nth (.labels louds) (unchecked-dec (rank-0 (.tree louds) (unchecked-inc i)))))
+;; (defn louds-label [^LOUDS louds ^long i]
+;;   (nth (.labels louds) (unchecked-dec (rank-0 (.tree louds) (unchecked-inc i)))))
 
-;; Position of the k-th child of the node started at p = select 0 (rank 1 (p + k)) + 1
-(defn louds-child ^long [^LOUDS louds ^long p ^long k]
-  (unchecked-inc (select-0 (.tree louds) (rank-1 (.tree louds) (unchecked-add p k)))))
+;; ;; Position of the k-th child of the node started at p = select 0 (rank 1 (p + k)) + 1
+;; (defn louds-child ^long [^LOUDS louds ^long p ^long k]
+;;   (unchecked-inc (select-0 (.tree louds) (rank-1 (.tree louds) (unchecked-add p k)))))
 
-;; Position of the parent of the node started at p = select 1 (rank 0 (p))
-(defn louds-parent ^long [^LOUDS louds ^long p]
-  (select-1 (.tree louds) (rank-0 (.tree louds) p)))
+;; ;; Position of the parent of the node started at p = select 1 (rank 0 (p))
+;; (defn louds-parent ^long [^LOUDS louds ^long p]
+;;   (select-1 (.tree louds) (rank-0 (.tree louds) p)))
 
 ;; http://www-erato.ist.hokudai.ac.jp/alsip2012/docs/tutorial.pdf
+;; slide 37, note that the 14 is wrong, should be 13, with zero based
+;; it becomes 12.
 
 (defn louds-node ^long [^LOUDS louds ^long i]
-  (select-1 (.tree louds) (unchecked-inc i)))
+  (unchecked-dec (rank-1 (.tree louds) i)))
+
+(defn louds-label [^LOUDS louds ^long i]
+  (nth (.labels louds) (louds-node louds i)))
 
 (defn louds-child ^long [^LOUDS louds ^long x ^long i]
-  (unchecked-add (select-0 (.tree louds) (rank-1 (.tree louds) x)) i))
+  (unchecked-add (select-0 (.tree louds) (unchecked-dec (rank-1 (.tree louds) x))) (unchecked-inc i)))
 
 (defn louds-parent ^long [^LOUDS louds ^long x]
-  (select-1 (.tree louds) (unchecked-dec (rank-0 (.tree louds) x)))
-  #_(select-1 (.tree louds) (rank-0 (.tree louds) x)))
+  (select-1 (.tree louds) (unchecked-dec (rank-0 (.tree louds) x))))
 
 (comment
-  (let [louds (build-louds
-               "110 10 110 1110 110 110 0 10 0 0 0 10 0 0 0"
-               ["0" "1" "2" "3" "4" "5" "6" "7" "8" "9" "A" "B" "C" "D" "E"])]
-    (louds-label louds (louds-child louds 0 1)))
-
   (let [louds ^LOUDS (build-louds "10 110 10 110 0 110 10 0 0 0"
                                   ["1" "2" "3" "4" "5" "6" "7" "8" "9"])]
-    (louds-child louds 4 2)
-    (louds-parent louds 14)
-    (louds-node louds 3)
-    (louds-node louds 8)
-    #_(louds-node louds 3)
-    #_(+ (select-0 (.tree louds) (rank-1 (.tree louds) 4)) 2)))
+    (assert (= 8 (louds-child louds (louds-child louds 0 1) 1)))
+    (assert (= 12 (louds-child louds (louds-child louds (louds-child louds 0 1) 0) 1)))
+    (assert (= 3 (louds-parent louds (louds-child louds (louds-child louds 0 1) 1))))
+    (assert (= 0 (louds-parent louds (louds-child louds 0 1))))
+
+    (assert (= "1" (louds-label louds 0)))
+    (assert (= "2" (louds-label louds (louds-child louds 0 0))))
+    (assert (= "3" (louds-label louds (louds-child louds 0 1))))
+    (assert (= "4" (louds-label louds (louds-child louds (louds-child louds 0 0) 0))))
+    (assert (= "5" (louds-label louds (louds-child louds (louds-child louds 0 1) 0))))
+    (assert (= "6" (louds-label louds (louds-child louds (louds-child louds 0 1) 1))))
+    (assert (= "7" (louds-label louds (louds-child louds (louds-child louds (louds-child louds 0 1) 0) 0))))
+    (assert (= "8" (louds-label louds (louds-child louds (louds-child louds (louds-child louds 0 1) 0) 1))))
+    (assert (= "9" (louds-label louds (louds-child louds (louds-child louds (louds-child louds 0 1) 1) 0))))))
