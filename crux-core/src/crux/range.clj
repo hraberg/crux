@@ -252,6 +252,9 @@
 (defn louds-node ^long [^LOUDS louds ^long i]
   (unchecked-dec (rank-1 (.tree louds) i)))
 
+(defn louds-position ^long [^LOUDS louds ^long n]
+  (select-1 (.tree louds) n))
+
 (defn louds-label [^LOUDS louds ^long i]
   (nth (.labels louds) (louds-node louds i)))
 
@@ -284,4 +287,9 @@
     (assert (= "6" (louds-label louds (louds-child louds (louds-child louds 0 1) 1))))
     (assert (= "7" (louds-label louds (louds-child louds (louds-child louds (louds-child louds 0 1) 0) 0))))
     (assert (= "8" (louds-label louds (louds-child louds (louds-child louds (louds-child louds 0 1) 0) 1))))
-    (assert (= "9" (louds-label louds (louds-child louds (louds-child louds (louds-child louds 0 1) 1) 0))))))
+    (assert (= "9" (louds-label louds (louds-child louds (louds-child louds (louds-child louds 0 1) 1) 0))))
+    (assert (= 0 (louds-position louds 0)))
+    (assert (= 2 (louds-position louds 1)))
+    (assert (= 1 (louds-node louds (louds-position louds 1))))
+    (assert (= 5 (louds-position louds 3)))
+    (assert (= 3 (louds-node louds (louds-position louds 3))))))
