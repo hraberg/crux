@@ -247,6 +247,9 @@
 
 ;; https://bitbucket.org/vsmirnov/memoria/wiki/LabeledTree
 
+;; Tests, uses one based node indexes, and zero based positions:
+;; https://github.com/laysakura/louds-rs/blob/master/src/louds/louds.rs
+
 ;; http://www-erato.ist.hokudai.ac.jp/alsip2012/docs/tutorial.pdf
 ;; slide 37, note that the 14 is wrong, should be 13, with zero based
 ;; it becomes 12.
