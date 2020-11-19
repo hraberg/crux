@@ -269,13 +269,15 @@
   (unchecked-subtract (select-0 (.tree louds) (unchecked-inc n)) (unchecked-inc (select-0 (.tree louds) n))))
 
 (defn louds-node-first-child ^long [^LOUDS louds ^long n]
-  (let [y (unchecked-inc (select-0 (.tree louds) n))]
-    (if (.contains ^Roaring64Bitmap (.tree louds) y)
-      (unchecked-dec (unchecked-subtract y n))
+  (let [ci (unchecked-inc (select-0 (.tree louds) n))]
+    (if (.contains ^Roaring64Bitmap (.tree louds) ci)
+      (unchecked-dec (unchecked-subtract ci n))
       -1)))
 
 (defn louds-node-parent ^long [^LOUDS louds ^long n]
-  (unchecked-dec (rank-0 (.tree louds) (louds-node-position louds n))))
+  (if (zero? n)
+    -1
+    (unchecked-dec (rank-0 (.tree louds) (louds-node-position louds n)))))
 
 ;; position index operations
 
@@ -286,10 +288,33 @@
   (louds-node-label louds (louds-node louds i)))
 
 (defn louds-child ^long [^LOUDS louds ^long i ^long c]
-  (unchecked-add (select-0 (.tree louds) (unchecked-dec (rank-1 (.tree louds) i))) (unchecked-inc c)))
+  (let [ci (unchecked-add (select-0 (.tree louds) (unchecked-dec (rank-1 (.tree louds) i))) (unchecked-inc c))]
+    (if (.contains ^Roaring64Bitmap (.tree louds) ci)
+      ci
+      -1)))
+
+(defn louds-leaf? [^LOUDS louds ^long i]
+  (= -1 (louds-child louds i 0)))
+
+(defn louds-sibling ^long [^LOUDS louds ^long i]
+  (let [si (unchecked-inc i)]
+    (if (and (.contains ^Roaring64Bitmap (.tree louds) i)
+             (.contains ^Roaring64Bitmap (.tree louds) si))
+      si
+      -1)))
 
 (defn louds-parent ^long [^LOUDS louds ^long i]
-  (select-1 (.tree louds) (unchecked-dec (rank-0 (.tree louds) i))))
+  (if (zero? i)
+    -1
+    (select-1 (.tree louds) (unchecked-dec (rank-0 (.tree louds) i)))))
+
+(defn louds-depth ^long [^LOUDS louds ^long i]
+  (loop [depth 0
+         i i]
+    (if (zero? i)
+      depth
+      (recur (unchecked-inc depth)
+             (louds-parent louds i)))))
 
 (comment
   (let [louds ^LOUDS (tree->louds ["1"
@@ -305,6 +330,18 @@
     (assert (= 12 (louds-child louds (louds-child louds (louds-child louds 0 1) 0) 1)))
     (assert (= 3 (louds-parent louds (louds-child louds (louds-child louds 0 1) 1))))
     (assert (= 0 (louds-parent louds (louds-child louds 0 1))))
+    (assert (= -1 (louds-parent louds 0)))
+    (assert (= -1 (louds-child louds (louds-child louds (louds-child louds 0 0) 0) 0)))
+    (assert (= 7 (louds-child louds (louds-child louds 0 1) 0)))
+    (assert (= 8 (louds-sibling louds (louds-child louds (louds-child louds 0 1) 0))))
+    (assert (= -1 (louds-sibling louds (louds-sibling louds (louds-child louds (louds-child louds 0 1) 0)))))
+    (assert (not (louds-leaf? louds 0)))
+    (assert (not (louds-leaf? louds 2)))
+    (assert (louds-leaf? louds 11))
+    (assert (zero? (louds-depth louds 0)))
+    (assert (= 1 (louds-depth louds 3)))
+    (assert (= 2 (louds-depth louds 8)))
+    (assert (= 3 (louds-depth louds 12)))
 
     (assert (= "1" (louds-label louds 0)))
     (assert (= "2" (louds-label louds (louds-child louds 0 0))))
@@ -327,4 +364,5 @@
     (assert (= 5 (louds-node-parent louds 8)))
     (assert (= 1 (louds-node-first-child louds 0)))
     (assert (= 3 (louds-node-first-child louds 1)))
-    (assert (= 8 (louds-node-first-child louds 5)))))
+    (assert (= 8 (louds-node-first-child louds 5)))
+    (assert (= -1 (louds-node-first-child louds 8)))))
