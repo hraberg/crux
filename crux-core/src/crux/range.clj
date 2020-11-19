@@ -245,6 +245,8 @@
 ;; (defn louds-parent ^long [^LOUDS louds ^long p]
 ;;   (select-1 (.tree louds) (rank-0 (.tree louds) p)))
 
+;; https://bitbucket.org/vsmirnov/memoria/wiki/LabeledTree
+
 ;; http://www-erato.ist.hokudai.ac.jp/alsip2012/docs/tutorial.pdf
 ;; slide 37, note that the 14 is wrong, should be 13, with zero based
 ;; it becomes 12.
