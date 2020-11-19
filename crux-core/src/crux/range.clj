@@ -255,6 +255,9 @@
 (defn louds-position ^long [^LOUDS louds ^long n]
   (select-1 (.tree louds) n))
 
+(defn louds-degree ^long [^LOUDS louds ^long n]
+  (unchecked-subtract (select-0 (.tree louds) (unchecked-inc n)) (unchecked-inc (select-0 (.tree louds) n))))
+
 (defn louds-label [^LOUDS louds ^long i]
   (nth (.labels louds) (louds-node louds i)))
 
@@ -292,4 +295,7 @@
     (assert (= 2 (louds-position louds 1)))
     (assert (= 1 (louds-node louds (louds-position louds 1))))
     (assert (= 5 (louds-position louds 3)))
-    (assert (= 3 (louds-node louds (louds-position louds 3))))))
+    (assert (= 3 (louds-node louds (louds-position louds 3))))
+    (assert (= 2 (louds-degree louds 0)))
+    (assert (= 2 (louds-degree louds 2)))
+    (assert (= 1 (louds-degree louds 5)))))
