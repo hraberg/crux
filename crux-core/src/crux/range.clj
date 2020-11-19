@@ -249,23 +249,42 @@
 ;; slide 37, note that the 14 is wrong, should be 13, with zero based
 ;; it becomes 12.
 
+;; i is bitmap position index (points to a one), n is BFS node index,
+;; c is child index. All zero based.
+
+;; node index operations
+
+(defn louds-node-label [^LOUDS louds ^long n]
+  (nth (.labels louds) n))
+
+(defn louds-node-position ^long [^LOUDS louds ^long n]
+  (select-1 (.tree louds) n))
+
+(defn louds-node-degree ^long [^LOUDS louds ^long n]
+  (unchecked-subtract (select-0 (.tree louds) (unchecked-inc n)) (unchecked-inc (select-0 (.tree louds) n))))
+
+(defn louds-node-first-child ^long [^LOUDS louds ^long n]
+  (let [y (unchecked-inc (select-0 (.tree louds) n))]
+    (if (.contains ^Roaring64Bitmap (.tree louds) y)
+      (unchecked-dec (unchecked-subtract y n))
+      -1)))
+
+(defn louds-node-parent ^long [^LOUDS louds ^long n]
+  (unchecked-dec (rank-0 (.tree louds) (louds-node-position louds n))))
+
+;; position index operations
+
 (defn louds-node ^long [^LOUDS louds ^long i]
   (unchecked-dec (rank-1 (.tree louds) i)))
 
-(defn louds-position ^long [^LOUDS louds ^long n]
-  (select-1 (.tree louds) n))
-
-(defn louds-degree ^long [^LOUDS louds ^long n]
-  (unchecked-subtract (select-0 (.tree louds) (unchecked-inc n)) (unchecked-inc (select-0 (.tree louds) n))))
-
 (defn louds-label [^LOUDS louds ^long i]
-  (nth (.labels louds) (louds-node louds i)))
+  (louds-node-label louds (louds-node louds i)))
 
-(defn louds-child ^long [^LOUDS louds ^long x ^long i]
-  (unchecked-add (select-0 (.tree louds) (unchecked-dec (rank-1 (.tree louds) x))) (unchecked-inc i)))
+(defn louds-child ^long [^LOUDS louds ^long i ^long c]
+  (unchecked-add (select-0 (.tree louds) (unchecked-dec (rank-1 (.tree louds) i))) (unchecked-inc c)))
 
-(defn louds-parent ^long [^LOUDS louds ^long x]
-  (select-1 (.tree louds) (unchecked-dec (rank-0 (.tree louds) x))))
+(defn louds-parent ^long [^LOUDS louds ^long i]
+  (select-1 (.tree louds) (unchecked-dec (rank-0 (.tree louds) i))))
 
 (comment
   (let [louds ^LOUDS (tree->louds ["1"
@@ -291,11 +310,16 @@
     (assert (= "7" (louds-label louds (louds-child louds (louds-child louds (louds-child louds 0 1) 0) 0))))
     (assert (= "8" (louds-label louds (louds-child louds (louds-child louds (louds-child louds 0 1) 0) 1))))
     (assert (= "9" (louds-label louds (louds-child louds (louds-child louds (louds-child louds 0 1) 1) 0))))
-    (assert (= 0 (louds-position louds 0)))
-    (assert (= 2 (louds-position louds 1)))
-    (assert (= 1 (louds-node louds (louds-position louds 1))))
-    (assert (= 5 (louds-position louds 3)))
-    (assert (= 3 (louds-node louds (louds-position louds 3))))
-    (assert (= 2 (louds-degree louds 0)))
-    (assert (= 2 (louds-degree louds 2)))
-    (assert (= 1 (louds-degree louds 5)))))
+    (assert (= 0 (louds-node-position louds 0)))
+    (assert (= 2 (louds-node-position louds 1)))
+    (assert (= 1 (louds-node louds (louds-node-position louds 1))))
+    (assert (= 5 (louds-node-position louds 3)))
+    (assert (= 3 (louds-node louds (louds-node-position louds 3))))
+    (assert (= 2 (louds-node-degree louds 0)))
+    (assert (= 2 (louds-node-degree louds 2)))
+    (assert (= 1 (louds-node-degree louds 5)))
+    (assert (= 0 (louds-node-parent louds 2)))
+    (assert (= 5 (louds-node-parent louds 8)))
+    (assert (= 1 (louds-node-first-child louds 0)))
+    (assert (= 3 (louds-node-first-child louds 1)))
+    (assert (= 8 (louds-node-first-child louds 5)))))
