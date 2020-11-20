@@ -449,6 +449,65 @@
                                              (rank-1 (.has-child? louds-dense) i))
                          (unchecked-dec (rank-1 (.prefix-key? louds-dense) (Long/divideUnsigned i 256)))))))
 
+(deftype LOUDSDS [^LOUDSDense dense ^LOUDSSparse sparse ^long dense-height ^long dense-nodes ^long dense-children])
+
+(defn louds-ds-find [^LOUDSDS louds-ds ^bytes k]
+  (let [louds-dense ^LOUDSDense (.dense louds-ds)
+        louds-sparse ^LOUDSSparse (.sparse louds-ds)]
+    (loop [n 0
+           level 0]
+      (when (< level (alength k))
+        (if (< level (.dense-height louds-ds))
+          (let [nn (Long/divideUnsigned n 256)
+                kp (+ n (Byte/toUnsignedLong (aget k level)))]
+            (when (.contains ^Roaring64Bitmap (.labels louds-dense) kp)
+              (let [c (louds-dense-child louds-dense kp)]
+                (cond
+                  (and (= (alength k) (inc level))
+                       (.contains ^Roaring64Bitmap (.prefix-key? louds-dense) (Long/divideUnsigned c 256)))
+                  (louds-dense-value louds-dense c)
+
+                  (= -1 c)
+                  (when (= (alength k) (inc level))
+                    (louds-dense-value louds-dense kp))
+
+                  :else
+                  (if (= (.dense-height louds-ds) (inc level))
+                    (recur (select-1 (.tree louds-sparse)
+                                     (unchecked-subtract (Long/divideUnsigned c 256) (.dense-nodes louds-ds)))
+                           (inc level))
+                    (recur c (inc level)))))))
+          (let [kb (aget k level)
+                n (long (loop [c n]
+                          (cond
+                            (= (aget ^bytes (.labels louds-sparse) c) kb)
+                            c
+
+                            (.contains ^Roaring64Bitmap (.tree louds-sparse) (unchecked-inc c))
+                            -1
+
+                            :else
+                            (recur (unchecked-inc c)))))]
+            (when (not= -1 n)
+              (let [c (if (.contains ^Roaring64Bitmap (.has-child? louds-sparse) n)
+                        (select-1 (.tree louds-sparse)
+                                  (unchecked-subtract (unchecked-add (rank-1 (.has-child? louds-sparse) n)
+                                                                     (.dense-children louds-ds))
+                                                      (.dense-nodes louds-ds)))
+                        -1)]
+                (cond
+                  (= -1 c)
+                  (when (= (alength k) (inc level))
+                    (louds-sparse-value louds-sparse n))
+
+                  (and (= (alength k) (inc level))
+                       (= (Byte/toUnsignedLong (aget ^bytes (.labels louds-sparse) c)) 0xff)
+                       (not (.contains ^Roaring64Bitmap (.has-child? louds-sparse) c)))
+                  (louds-sparse-value louds-sparse c)
+
+                  :else
+                  (recur c (inc level)))))))))))
+
 (comment
   (let [louds (str->louds-sparse "fst\u00ffaorrstpyiy\u00fftep"
                                  "1 0 1 0 1 1 1 0 1 0 0 0 1 0 0 0 0 0"
@@ -510,4 +569,42 @@
     (assert (= -1 (louds-dense-child louds (+ (louds-dense-child louds (unchecked-int \f)) (unchecked-int \b)))))
 
     (assert (= "v1" (louds-dense-value louds (unchecked-int \s))))
-    (assert (= "v2" (louds-dense-value louds 256)))))
+    (assert (= "v2" (louds-dense-value louds 256))))
+
+  (let [louds (->LOUDSDS
+               (->LOUDSDense
+                (doto (Roaring64Bitmap.)
+                  (.addLong (unchecked-int \f))
+                  (.addLong (unchecked-int \s))
+                  (.addLong (unchecked-int \t))
+                  (.addLong (+ (* 1 256) (unchecked-int \a)))
+                  (.addLong (+ (* 2 256) (unchecked-int \o)))
+                  (.addLong (+ (* 2 256) (unchecked-int \r))))
+                (doto (Roaring64Bitmap.)
+                  (.addLong (unchecked-int \f))
+                  (.addLong (unchecked-int \t))
+                  (.addLong (+ (* 1 256) (unchecked-int \a)))
+                  (.addLong (+ (* 2 256) (unchecked-int \o)))
+                  (.addLong (+ (* 2 256) (unchecked-int \r))))
+                (doto (Roaring64Bitmap.)
+                  (.addLong 1))
+                (object-array ["v1" "v2"]))
+               (str->louds-sparse "rstpyiy\u00fftep"
+                                  "0 1 0 0 0 1 0 0 0 0 0"
+                                  "1 0 0 1 0 1 0 1 0 1 0"
+                                  ["v3" "v4" "v5" "v6" "v7" "v8" "v9" "v10" "v11"])
+               2
+               3
+               5)]
+
+    (assert (= "v1" (louds-ds-find louds (.getBytes "s" StandardCharsets/UTF_8))))
+    (assert (= "v2" (louds-ds-find louds (.getBytes "f" StandardCharsets/UTF_8))))
+    (assert (= "v3" (louds-ds-find louds (.getBytes "far" StandardCharsets/UTF_8))))
+    (assert (= "v4" (louds-ds-find louds (.getBytes "fat" StandardCharsets/UTF_8))))
+    (assert (= "v5" (louds-ds-find louds (.getBytes "top" StandardCharsets/UTF_8))))
+    (assert (= "v6" (louds-ds-find louds (.getBytes "toy" StandardCharsets/UTF_8))))
+    (assert (= "v7" (louds-ds-find louds (.getBytes "try" StandardCharsets/UTF_8))))
+    (assert (= "v8" (louds-ds-find louds (.getBytes "fas" StandardCharsets/UTF_8))))
+    (assert (= "v9" (louds-ds-find louds (.getBytes "fast" StandardCharsets/UTF_8))))
+    (assert (= "v10" (louds-ds-find louds (.getBytes "trie" StandardCharsets/UTF_8))))
+    (assert (= "v11" (louds-ds-find louds (.getBytes "trip" StandardCharsets/UTF_8))))))
