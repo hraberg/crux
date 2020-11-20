@@ -439,13 +439,15 @@
 (defn louds-dense-parent ^long [^LOUDSDense louds-dense ^long i]
   (if (zero? i)
     -1
-    (select-1 (.has-child? louds-dense) (Long/divideUnsigned i 256))))
+    (select-1 (.has-child? louds-dense) (unchecked-dec (Long/divideUnsigned i 256)))))
 
 ;; rank1(D-Labels, pos) - rank1(D-HasChild, pos) + rank1(D-IsPrefixKey, [pos/256]) - 1
 (defn louds-dense-value [^LOUDSDense louds-dense ^long i]
-  (unchecked-subtract (rank-1 (.labels louds-dense) i)
-                      (unchecked-add (rank-1 (.has-child? louds-dense) i)
-                                     (unchecked-dec (rank-1 (.prefix-key? louds-dense) (Long/divideUnsigned i 256))))))
+  (when-not (.contains ^Roaring64Bitmap (.has-child? louds-dense) i)
+    (aget ^objects (.values louds-dense)
+          (unchecked-add (unchecked-subtract (rank-1 (.labels louds-dense) i)
+                                             (rank-1 (.has-child? louds-dense) i))
+                         (unchecked-dec (rank-1 (.prefix-key? louds-dense) (Long/divideUnsigned i 256)))))))
 
 (comment
   (let [louds (str->louds-sparse "fst\u00ffaorrstpyiy\u00fftep"
@@ -478,4 +480,32 @@
     (assert (= -1 (louds-sparse-parent louds 0)))
     (assert (= 0 (louds-sparse-parent louds (louds-sparse-child louds 0))))
     (assert (= 4 (louds-sparse-parent louds (louds-sparse-child louds (inc (louds-sparse-child louds 0))))))
-    (assert (= 8 (louds-sparse-parent louds (louds-sparse-child louds (inc (louds-sparse-child louds (inc (louds-sparse-child louds 0))))))))))
+    (assert (= 8 (louds-sparse-parent louds (louds-sparse-child louds (inc (louds-sparse-child louds (inc (louds-sparse-child louds 0)))))))))
+
+  (let [louds (->LOUDSDense
+               (doto (Roaring64Bitmap.)
+                 (.addLong (unchecked-int \f))
+                 (.addLong (unchecked-int \s))
+                 (.addLong (unchecked-int \t))
+                 (.addLong (+ (* 1 256) (unchecked-int \a)))
+                 (.addLong (+ (* 2 256) (unchecked-int \o)))
+                 (.addLong (+ (* 2 256) (unchecked-int \r))))
+               (doto (Roaring64Bitmap.)
+                 (.addLong (unchecked-int \f))
+                 (.addLong (unchecked-int \t))
+                 (.addLong (+ (* 1 256) (unchecked-int \a)))
+                 (.addLong (+ (* 2 256) (unchecked-int \o)))
+                 (.addLong (+ (* 2 256) (unchecked-int \r))))
+               (doto (Roaring64Bitmap.)
+                 (.addLong 1))
+               (object-array ["v1" "v2"]))]
+    (assert (= 256 (louds-dense-child louds (unchecked-int \f))))
+    (assert (= -1 (louds-dense-child louds (unchecked-int \s))))
+    (assert (= 512 (louds-dense-child louds (unchecked-int \t))))
+    (assert (= (unchecked-int \f) (louds-dense-parent louds (louds-dense-child louds (unchecked-int \f)))))
+
+    (assert (= 768 (louds-dense-child louds (+ (louds-dense-child louds (unchecked-int \f)) (unchecked-int \a)))))
+    (assert (= -1 (louds-dense-child louds (+ (louds-dense-child louds (unchecked-int \f)) (unchecked-int \b)))))
+
+    (assert (= "v1" (louds-dense-value louds (unchecked-int \s))))
+    (assert (= "v2" (louds-dense-value louds 256)))))
