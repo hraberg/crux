@@ -386,13 +386,16 @@
 
 ;; select1(S-HasChild, rank1(S-LOUDS, pos) - 1)
 (defn louds-sparse-parent ^long [^LOUDSSparse louds-sparse ^long i]
-  (select-1 (.has-child? louds-sparse)
-            (unchecked-subtract (rank-1 (.tree louds-sparse) i) 2)))
+  (if (zero? i)
+    -1
+    (select-1 (.has-child? louds-sparse)
+              (unchecked-subtract (rank-1 (.tree louds-sparse) i) 2))))
 
 ;; pos - rank1(S-HasChild, pos)
 (defn louds-sparse-value [^LOUDSSparse louds-sparse ^long i]
-  (aget ^objects (.values louds-sparse)
-        (unchecked-subtract i (rank-1 (.has-child? louds-sparse) i))))
+  (when-not (.contains ^Roaring64Bitmap (.has-child? louds-sparse) i)
+    (aget ^objects (.values louds-sparse)
+          (unchecked-subtract i (rank-1 (.has-child? louds-sparse) i)))))
 
 (defn louds-sparse-find [^LOUDSSparse louds-sparse ^bytes k]
   (loop [n 0
@@ -411,20 +414,32 @@
                         (recur (unchecked-inc c)))))]
         (when (not= -1 n)
           (let [c (louds-sparse-child louds-sparse n)]
-            (if (= -1 c)
+            (cond
+              (= -1 c)
               (when (= (alength k) (inc level))
                 (louds-sparse-value louds-sparse n))
+
+              (and (= (alength k) (inc level))
+                   (= (Byte/toUnsignedLong (aget ^bytes (.labels louds-sparse) c)) 0xff)
+                   (not (.contains ^Roaring64Bitmap (.has-child? louds-sparse) c)))
+              (louds-sparse-value louds-sparse c)
+
+              :else
               (recur c (inc level)))))))))
 
 (deftype LOUDSDense [^Roaring64Bitmap labels ^Roaring64Bitmap has-child? ^Roaring64Bitmap prefix-key? ^objects values])
 
 ;; 256 × rank1(D-HasChild, pos)
 (defn louds-dense-child ^long [^LOUDSDense louds-dense ^long i]
-  (unchecked-multiply 256 (rank-1 (.has-child? louds-dense) i)))
+  (if (.contains ^Roaring64Bitmap (.has-child? louds-dense) i)
+    (unchecked-multiply 256 (rank-1 (.has-child? louds-dense) i))
+    -1))
 
 ;; select1(D-HasChild, [pos/256])
 (defn louds-dense-parent ^long [^LOUDSDense louds-dense ^long i]
-  (select-1 (.has-child? louds-dense) (Long/divideUnsigned i 256)))
+  (if (zero? i)
+    -1
+    (select-1 (.has-child? louds-dense) (Long/divideUnsigned i 256))))
 
 ;; rank1(D-Labels, pos) - rank1(D-HasChild, pos) + rank1(D-IsPrefixKey, [pos/256]) - 1
 (defn louds-dense-value [^LOUDSDense louds-dense ^long i]
@@ -433,19 +448,19 @@
                                      (unchecked-dec (rank-1 (.prefix-key? louds-dense) (Long/divideUnsigned i 256))))))
 
 (comment
-  (let [louds (str->louds-sparse "fst\u00ffaorrstypiy\u00fftep"
+  (let [louds (str->louds-sparse "fst\u00ffaorrstpyiy\u00fftep"
                                  "1 0 1 0 1 1 1 0 1 0 0 0 1 0 0 0 0 0"
                                  "1 0 0 1 0 1 0 1 0 0 1 0 1 0 1 0 1 0"
                                  ["v1" "v2" "v3" "v4" "v5" "v6" "v7" "v8" "v9" "v10" "v11"])]
 
     (assert (= "v1" (louds-sparse-find louds (.getBytes "s" StandardCharsets/UTF_8))))
-    (assert (= "v2" (louds-sparse-find louds (byte-array (map unchecked-int (seq "f\u00ff"))))))
+    (assert (= "v2" (louds-sparse-find louds (.getBytes "f" StandardCharsets/UTF_8))))
     (assert (= "v3" (louds-sparse-find louds (.getBytes "far" StandardCharsets/UTF_8))))
     (assert (= "v4" (louds-sparse-find louds (.getBytes "fat" StandardCharsets/UTF_8))))
-    (assert (= "v5" (louds-sparse-find louds (.getBytes "toy" StandardCharsets/UTF_8))))
-    (assert (= "v6" (louds-sparse-find louds (.getBytes "top" StandardCharsets/UTF_8))))
+    (assert (= "v5" (louds-sparse-find louds (.getBytes "top" StandardCharsets/UTF_8))))
+    (assert (= "v6" (louds-sparse-find louds (.getBytes "toy" StandardCharsets/UTF_8))))
     (assert (= "v7" (louds-sparse-find louds (.getBytes "try" StandardCharsets/UTF_8))))
-    (assert (= "v8" (louds-sparse-find louds (byte-array (map unchecked-int (seq "fas\u00ff"))))))
+    (assert (= "v8" (louds-sparse-find louds (.getBytes "fas" StandardCharsets/UTF_8))))
     (assert (= "v9" (louds-sparse-find louds (.getBytes "fast" StandardCharsets/UTF_8))))
     (assert (= "v10" (louds-sparse-find louds (.getBytes "trie" StandardCharsets/UTF_8))))
     (assert (= "v11" (louds-sparse-find louds (.getBytes "trip" StandardCharsets/UTF_8))))
@@ -453,4 +468,14 @@
     (assert (nil? (louds-sparse-find louds (.getBytes "" StandardCharsets/UTF_8))))
     (assert (nil? (louds-sparse-find louds (.getBytes "so" StandardCharsets/UTF_8))))
     (assert (nil? (louds-sparse-find louds (.getBytes "tr" StandardCharsets/UTF_8))))
-    (assert (nil? (louds-sparse-find louds (.getBytes "faster" StandardCharsets/UTF_8))))))
+    (assert (nil? (louds-sparse-find louds (.getBytes "faster" StandardCharsets/UTF_8))))
+
+    (assert (= 3 (louds-sparse-child louds 0)))
+    (assert (= -1 (louds-sparse-child louds (louds-sparse-child louds 0))))
+    (assert (= 7 (louds-sparse-child louds (inc (louds-sparse-child louds 0)))))
+    (assert (= 14 (louds-sparse-child louds (inc (louds-sparse-child louds (inc (louds-sparse-child louds 0)))))))
+
+    (assert (= -1 (louds-sparse-parent louds 0)))
+    (assert (= 0 (louds-sparse-parent louds (louds-sparse-child louds 0))))
+    (assert (= 4 (louds-sparse-parent louds (louds-sparse-child louds (inc (louds-sparse-child louds 0))))))
+    (assert (= 8 (louds-sparse-parent louds (louds-sparse-child louds (inc (louds-sparse-child louds (inc (louds-sparse-child louds 0))))))))))
