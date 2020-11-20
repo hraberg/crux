@@ -463,13 +463,13 @@
             (when (.contains ^Roaring64Bitmap (.labels louds-dense) kp)
               (let [c (louds-dense-child louds-dense kp)]
                 (cond
-                  (and (= (alength k) (inc level))
-                       (.contains ^Roaring64Bitmap (.prefix-key? louds-dense) (Long/divideUnsigned c 256)))
-                  (louds-dense-value louds-dense c)
-
                   (= -1 c)
                   (when (= (alength k) (inc level))
                     (louds-dense-value louds-dense kp))
+
+                  (and (= (alength k) (inc level))
+                       (.contains ^Roaring64Bitmap (.prefix-key? louds-dense) (Long/divideUnsigned c 256)))
+                  (louds-dense-value louds-dense c)
 
                   :else
                   (if (= (.dense-height louds-ds) (inc level))
