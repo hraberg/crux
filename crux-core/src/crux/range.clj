@@ -449,11 +449,16 @@
                                              (rank-1 (.has-child? louds-dense) i))
                          (unchecked-dec (rank-1 (.prefix-key? louds-dense) (Long/divideUnsigned i 256)))))))
 
-(deftype LOUDSDS [^LOUDSDense dense ^LOUDSSparse sparse ^long dense-height ^long dense-nodes ^long dense-children])
+(deftype LOUDSDS [^LOUDSDense dense ^LOUDSSparse sparse ^long dense-height])
 
 (defn louds-ds-find [^LOUDSDS louds-ds ^bytes k]
   (let [louds-dense ^LOUDSDense (.dense louds-ds)
-        louds-sparse ^LOUDSSparse (.sparse louds-ds)]
+        louds-sparse ^LOUDSSparse (.sparse louds-ds)
+        dense-children (.getLongCardinality ^Roaring64Bitmap (.has-child? louds-dense))
+        dense-nodes (unchecked-inc (Long/divideUnsigned
+                                    (select-1 (.labels louds-dense)
+                                              (unchecked-dec (.getLongCardinality ^Roaring64Bitmap (.labels louds-dense))))
+                                    256))]
     (loop [n 0
            level 0]
       (when (< level (alength k))
@@ -467,7 +472,7 @@
                     (louds-dense-value louds-dense c)
                     (recur (if (= (.dense-height louds-ds) (inc level))
                              (select-1 (.tree louds-sparse)
-                                       (unchecked-subtract (Long/divideUnsigned c 256) (.dense-nodes louds-ds)))
+                                       (unchecked-subtract (Long/divideUnsigned c 256) dense-nodes))
                              c)
                            (inc level))))
                 (when (= (alength k) (inc level))
@@ -481,8 +486,8 @@
               (if (.contains ^Roaring64Bitmap (.has-child? louds-sparse) n)
                 (let [c (select-1 (.tree louds-sparse)
                                   (unchecked-subtract (unchecked-add (rank-1 (.has-child? louds-sparse) n)
-                                                                     (.dense-children louds-ds))
-                                                      (.dense-nodes louds-ds)))]
+                                                                     dense-children)
+                                                      dense-nodes))]
                   (if (and (= (alength k) (inc level))
                            (= (Byte/toUnsignedLong (aget ^bytes (.labels louds-sparse) c)) 0xff)
                            (not (.contains ^Roaring64Bitmap (.has-child? louds-sparse) c)))
@@ -576,9 +581,7 @@
                                   "0 1 0 0 0 1 0 0 0 0 0"
                                   "1 0 0 1 0 1 0 1 0 1 0"
                                   ["v3" "v4" "v5" "v6" "v7" "v8" "v9" "v10" "v11"])
-               2
-               3
-               5)]
+               2)]
 
     (assert (nil? (louds-ds-find louds (.getBytes "a" StandardCharsets/UTF_8))))
     (assert (nil? (louds-ds-find louds (.getBytes "bar" StandardCharsets/UTF_8))))
