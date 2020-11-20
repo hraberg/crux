@@ -460,46 +460,36 @@
         (if (< level (.dense-height louds-ds))
           (let [n (+ n (Byte/toUnsignedLong (aget k level)))]
             (when (.contains ^Roaring64Bitmap (.labels louds-dense) n)
-              (let [c (louds-dense-child louds-dense n)]
-                (cond
-                  (= -1 c)
-                  (when (= (alength k) (inc level))
-                    (louds-dense-value louds-dense n))
-
-                  (and (= (alength k) (inc level))
-                       (.contains ^Roaring64Bitmap (.prefix-key? louds-dense) (Long/divideUnsigned c 256)))
-                  (louds-dense-value louds-dense c)
-
-                  :else
-                  (if (= (.dense-height louds-ds) (inc level))
-                    (recur (select-1 (.tree louds-sparse)
-                                     (unchecked-subtract (Long/divideUnsigned c 256) (.dense-nodes louds-ds)))
-                           (inc level))
-                    (recur c (inc level)))))))
+              (if (.contains ^Roaring64Bitmap (.has-child? louds-dense) n)
+                (let [c (unchecked-multiply 256 (rank-1 (.has-child? louds-dense) n))]
+                  (if (and (= (alength k) (inc level))
+                           (.contains ^Roaring64Bitmap (.prefix-key? louds-dense) (Long/divideUnsigned c 256)))
+                    (louds-dense-value louds-dense c)
+                    (recur (if (= (.dense-height louds-ds) (inc level))
+                             (select-1 (.tree louds-sparse)
+                                       (unchecked-subtract (Long/divideUnsigned c 256) (.dense-nodes louds-ds)))
+                             c)
+                           (inc level))))
+                (when (= (alength k) (inc level))
+                  (louds-dense-value louds-dense n)))))
           (let [rn (rank-1 (.tree louds-sparse) n)
                 nn (if (= rn (.getLongCardinality ^Roaring64Bitmap (.tree louds-sparse)))
                      (long (alength ^bytes (.labels louds-sparse)))
                      (select-1 (.tree louds-sparse) rn))
                 n (Arrays/binarySearch ^bytes (.labels louds-sparse) n nn (aget k level))]
-            (when (not (neg? n))
-              (let [c (if (.contains ^Roaring64Bitmap (.has-child? louds-sparse) n)
-                        (select-1 (.tree louds-sparse)
+            (when-not (neg? n)
+              (if (.contains ^Roaring64Bitmap (.has-child? louds-sparse) n)
+                (let [c (select-1 (.tree louds-sparse)
                                   (unchecked-subtract (unchecked-add (rank-1 (.has-child? louds-sparse) n)
                                                                      (.dense-children louds-ds))
-                                                      (.dense-nodes louds-ds)))
-                        -1)]
-                (cond
-                  (= -1 c)
-                  (when (= (alength k) (inc level))
-                    (louds-sparse-value louds-sparse n))
-
-                  (and (= (alength k) (inc level))
-                       (= (Byte/toUnsignedLong (aget ^bytes (.labels louds-sparse) c)) 0xff)
-                       (not (.contains ^Roaring64Bitmap (.has-child? louds-sparse) c)))
-                  (louds-sparse-value louds-sparse c)
-
-                  :else
-                  (recur c (inc level)))))))))))
+                                                      (.dense-nodes louds-ds)))]
+                  (if (and (= (alength k) (inc level))
+                           (= (Byte/toUnsignedLong (aget ^bytes (.labels louds-sparse) c)) 0xff)
+                           (not (.contains ^Roaring64Bitmap (.has-child? louds-sparse) c)))
+                    (louds-sparse-value louds-sparse c)
+                    (recur c (inc level))))
+                (when (= (alength k) (inc level))
+                  (louds-sparse-value louds-sparse n))))))))))
 
 (comment
   (let [louds (str->louds-sparse "fst\u00ffaorrstpyiy\u00fftep"
