@@ -4,7 +4,7 @@
            clojure.lang.PersistentQueue
            java.nio.ByteOrder
            java.nio.charset.StandardCharsets
-           [java.util NavigableSet TreeSet])
+           [java.util Arrays NavigableSet TreeSet])
   (:require [clojure.string :as str]
             [crux.codec :as c]
             [crux.memory :as mem]))
@@ -458,14 +458,13 @@
            level 0]
       (when (< level (alength k))
         (if (< level (.dense-height louds-ds))
-          (let [nn (Long/divideUnsigned n 256)
-                kp (+ n (Byte/toUnsignedLong (aget k level)))]
-            (when (.contains ^Roaring64Bitmap (.labels louds-dense) kp)
-              (let [c (louds-dense-child louds-dense kp)]
+          (let [n (+ n (Byte/toUnsignedLong (aget k level)))]
+            (when (.contains ^Roaring64Bitmap (.labels louds-dense) n)
+              (let [c (louds-dense-child louds-dense n)]
                 (cond
                   (= -1 c)
                   (when (= (alength k) (inc level))
-                    (louds-dense-value louds-dense kp))
+                    (louds-dense-value louds-dense n))
 
                   (and (= (alength k) (inc level))
                        (.contains ^Roaring64Bitmap (.prefix-key? louds-dense) (Long/divideUnsigned c 256)))
@@ -477,18 +476,12 @@
                                      (unchecked-subtract (Long/divideUnsigned c 256) (.dense-nodes louds-ds)))
                            (inc level))
                     (recur c (inc level)))))))
-          (let [kb (aget k level)
-                n (long (loop [c n]
-                          (cond
-                            (= (aget ^bytes (.labels louds-sparse) c) kb)
-                            c
-
-                            (.contains ^Roaring64Bitmap (.tree louds-sparse) (unchecked-inc c))
-                            -1
-
-                            :else
-                            (recur (unchecked-inc c)))))]
-            (when (not= -1 n)
+          (let [rn (rank-1 (.tree louds-sparse) n)
+                nn (if (= rn (.getLongCardinality ^Roaring64Bitmap (.tree louds-sparse)))
+                     (long (alength ^bytes (.labels louds-sparse)))
+                     (select-1 (.tree louds-sparse) rn))
+                n (Arrays/binarySearch ^bytes (.labels louds-sparse) n nn (aget k level))]
+            (when (not (neg? n))
               (let [c (if (.contains ^Roaring64Bitmap (.has-child? louds-sparse) n)
                         (select-1 (.tree louds-sparse)
                                   (unchecked-subtract (unchecked-add (rank-1 (.has-child? louds-sparse) n)
@@ -597,6 +590,10 @@
                3
                5)]
 
+    (assert (nil? (louds-ds-find louds (.getBytes "a" StandardCharsets/UTF_8))))
+    (assert (nil? (louds-ds-find louds (.getBytes "bar" StandardCharsets/UTF_8))))
+    (assert (nil? (louds-ds-find louds (.getBytes "foo" StandardCharsets/UTF_8))))
+    (assert (nil? (louds-ds-find louds (.getBytes "tria" StandardCharsets/UTF_8))))
     (assert (= "v1" (louds-ds-find louds (.getBytes "s" StandardCharsets/UTF_8))))
     (assert (= "v2" (louds-ds-find louds (.getBytes "f" StandardCharsets/UTF_8))))
     (assert (= "v3" (louds-ds-find louds (.getBytes "far" StandardCharsets/UTF_8))))
