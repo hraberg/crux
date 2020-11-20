@@ -505,6 +505,8 @@
     (assert (= (unchecked-int \f) (louds-dense-parent louds (louds-dense-child louds (unchecked-int \f)))))
 
     (assert (= 768 (louds-dense-child louds (+ (louds-dense-child louds (unchecked-int \f)) (unchecked-int \a)))))
+    (assert (= (+ (louds-dense-child louds (unchecked-int \f)) (unchecked-int \a))
+               (louds-dense-parent louds (louds-dense-child louds (+ (louds-dense-child louds (unchecked-int \f)) (unchecked-int \a))))))
     (assert (= -1 (louds-dense-child louds (+ (louds-dense-child louds (unchecked-int \f)) (unchecked-int \b)))))
 
     (assert (= "v1" (louds-dense-value louds (unchecked-int \s))))
