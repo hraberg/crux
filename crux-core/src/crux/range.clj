@@ -502,6 +502,10 @@
                                  "1 0 0 1 0 1 0 1 0 0 1 0 1 0 1 0 1 0"
                                  ["v1" "v2" "v3" "v4" "v5" "v6" "v7" "v8" "v9" "v10" "v11"])]
 
+    (prn (alength ^bytes (.labels louds)))
+    (prn (.serializedSizeInBytes ^Roaring64Bitmap (.has-child? louds)))
+    (prn (.serializedSizeInBytes ^Roaring64Bitmap (.tree louds)))
+
     (assert (= "v1" (louds-sparse-find louds (.getBytes "s" StandardCharsets/UTF_8))))
     (assert (= "v2" (louds-sparse-find louds (.getBytes "f" StandardCharsets/UTF_8))))
     (assert (= "v3" (louds-sparse-find louds (.getBytes "far" StandardCharsets/UTF_8))))
@@ -582,6 +586,14 @@
                                   "1 0 0 1 0 1 0 1 0 1 0"
                                   ["v3" "v4" "v5" "v6" "v7" "v8" "v9" "v10" "v11"])
                2)]
+
+    (prn (.serializedSizeInBytes ^Roaring64Bitmap (.labels ^LOUDSDense (.dense ^LOUDSDS louds))))
+    (prn (.serializedSizeInBytes ^Roaring64Bitmap (.has-child? ^LOUDSDense (.dense ^LOUDSDS louds))))
+    (prn (.serializedSizeInBytes ^Roaring64Bitmap (.prefix-key? ^LOUDSDense (.dense ^LOUDSDS louds))))
+
+    (prn (alength ^bytes (.labels ^LOUDSSparse (.sparse ^LOUDSDS louds))))
+    (prn (.serializedSizeInBytes ^Roaring64Bitmap (.has-child? ^LOUDSSparse (.sparse ^LOUDSDS louds))))
+    (prn (.serializedSizeInBytes ^Roaring64Bitmap (.tree ^LOUDSSparse (.sparse ^LOUDSDS louds))))
 
     (assert (nil? (louds-ds-find louds (.getBytes "a" StandardCharsets/UTF_8))))
     (assert (nil? (louds-ds-find louds (.getBytes "bar" StandardCharsets/UTF_8))))
