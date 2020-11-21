@@ -598,3 +598,99 @@
     (assert (= "v9" (louds-ds-find louds (.getBytes "fast" StandardCharsets/UTF_8))))
     (assert (= "v10" (louds-ds-find louds (.getBytes "trie" StandardCharsets/UTF_8))))
     (assert (= "v11" (louds-ds-find louds (.getBytes "trip" StandardCharsets/UTF_8))))))
+
+;; NOTE: from SuRF, in Roaring both take zero-based indexes, so select
+;; needs a dec:
+
+;; // Counts the number of 1's in the bitvector up to position pos.
+;; // pos is zero-based ; count is one-based.
+;; // E.g., for bitvector: 100101000, rank(3) = 2
+
+;; // Returns the postion of the rank-th 1 bit.
+;; // posistion is zero-based; rank is one-based.
+;; // E.g., for bitvector: 100101000, select(3) = 5
+
+;; Note: in SuRF code, they translate back and forth to nodes ids
+;; more, suffix is the value in SuRF. Moving to parent is never used,
+;; its position is cached in the iterator.
+
+;; Sparse:
+
+;; ;; rank1(S-HasChild, pos)
+;; position_t LoudsSparse::getChildNodeNum(const position_t pos) const {
+;;     return (child_indicator_bits_->rank(pos) + child_count_dense_);
+;; }
+
+;; ;; select1(S-LOUDS, node_num + 1)
+;; position_t LoudsSparse::getFirstLabelPos(const position_t node_num) const {
+;;     return louds_bits_->select(node_num + 1 - node_count_dense_);
+;; }
+
+;; ;; pos - rank1(S-HasChild, pos)
+;; position_t LoudsSparse::getSuffixPos(const position_t pos) const {
+;;     return (pos - child_indicator_bits_->rank(pos));
+;; }
+
+;; Dense:
+
+;; ;; rank1(D-HasChild, pos)
+;; position_t LoudsDense::getChildNodeNum(const position_t pos) const {
+;;     return child_indicator_bitmaps_->rank(pos);
+;; }
+
+;; ;; 256 × node_num
+;; getFirstLabelPos is node_num * kNodeFanout (which is 256).
+
+;; ;; rank1(D-Labels, pos) - rank1(D-HasChild, pos) + rank1(D-IsPrefixKey, [pos/256]) - 1
+;; position_t LoudsDense::getSuffixPos(const position_t pos, const bool is_prefix_key) const {
+;;     position_t node_num = pos / kNodeFanout;
+;;     position_t suffix_pos = (label_bitmaps_->rank(pos)
+;; 			     - child_indicator_bitmaps_->rank(pos)
+;; 			     + prefixkey_indicator_bits_->rank(node_num)
+;; 			     - 1);
+;;     if (is_prefix_key && label_bitmaps_->readBit(pos) && !child_indicator_bitmaps_->readBit(pos))
+;; 	suffix_pos--;
+;;     return suffix_pos;
+;; }
+
+
+;; Builds a (normal) LOUDS tree from a sorted list of keys, using a
+;; queue, similar to tree->louds but without explicitly constructing
+;; the tree by pushing suffixes into the queue:
+
+;; https://github.com/yohokuno/matsu-trie/blob/master/loudsTrie.hpp
+
+;; // build bit vectors from word list
+;; void build(vector<const char*> &words) {
+;;     queue<const char*> que;
+;;     for (auto word : words) {
+;;         que.push(word);
+;;     }
+
+;;     // super root
+;;     louds.push_back(1);
+;;     louds.push_back(0);
+
+;;     char prev = '\0';
+;;     while (!que.empty()) {
+;;         const char *p = que.front(); que.pop();
+
+;;         if (p != NULL) {
+;;             // internal node case
+;;             if (*p != prev) {
+;;                 labels.push_back(*p);
+;;                 louds.push_back(1);
+;;                 prev = *p;
+;;                 que.push(NULL);     // add external node
+
+;;             }
+;;             if (*(p+1) != '\0') {
+;;                 que.push(p + 1);    // add internal node
+;;             }
+;;         } else {
+;;             // external node case
+;;             louds.push_back(0);
+;;             prev = '\0';
+;;         }
+;;     }
+;; }
