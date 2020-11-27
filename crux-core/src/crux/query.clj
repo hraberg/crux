@@ -26,8 +26,9 @@
            crux.codec.EntityTx
            crux.index.IndexStoreIndexState
            (java.io Closeable Writer)
-           (java.util Collection Comparator Date List UUID)
-           (java.util.concurrent Future Executors ScheduledExecutorService TimeoutException TimeUnit)))
+           (java.util Collection Comparator Date List HashMap Map UUID)
+           (java.util.concurrent Future Executors ScheduledExecutorService TimeoutException TimeUnit)
+           java.util.function.Function))
 
 (defn logic-var? [x]
   (and (symbol? x)
@@ -539,18 +540,15 @@
                                   arg))
                            or-join-vars)}))
 
-(def ^:private range-filters (java.util.HashMap.))
-
-(defn- new-range-filter [cache-k-fn seek-fn]
+(defn- new-range-filter [^Map range-filters cache-k-fn seek-fn]
   (fn step [k]
-    (let [[^org.roaringbitmap.longlong.Roaring64Bitmap bm
-           ^java.util.Map cache]
-          (.computeIfAbsent ^java.util.Map range-filters
+    (let [[bm ^Map cache]
+          (.computeIfAbsent range-filters
                             (cache-k-fn)
-                            (reify java.util.function.Function
+                            (reify Function
                               (apply [_ _]
-                                [(org.roaringbitmap.longlong.Roaring64Bitmap.)
-                                 (java.util.HashMap.)])))
+                                [(rng/->range-filter)
+                                 (HashMap.)])))
           k-long (if k
                    (rng/buffer->long k)
                    0)]
@@ -579,18 +577,20 @@
             (cons x (lazy-seq
                      (seek-fn (mem/inc-unsigned-buffer! (mem/copy-to-unpooled-buffer x)))))))))))
 
-(defn- new-binary-index [{:keys [e a v] :as clause} {:keys [entity-resolver-fn]} index-snapshot {:keys [vars-in-join-order]}]
+(defn- new-binary-index [{:keys [e a v] :as clause} {:keys [entity-resolver-fn range-filters]} index-snapshot {:keys [vars-in-join-order]}]
   (let [order (keep #{e v} vars-in-join-order)
         nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)
         attr-buffer (mem/copy-to-unpooled-buffer (c/->id-buffer a))]
     (if (= v (first order))
       (let [v-idx (idx/new-index-store-index
                    (new-range-filter
+                    range-filters
                     (constantly [a :v])
                     (fn [k]
                       (db/av nested-index-snapshot attr-buffer k))))
             e-idx (idx/new-index-store-index
                    (new-range-filter
+                    range-filters
                     (fn []
                       [a :v (mem/copy-to-unpooled-buffer (.key ^IndexStoreIndexState (.state v-idx)))])
                     (fn [k]
@@ -599,11 +599,13 @@
         (idx/new-n-ary-join-layered-virtual-index [v-idx e-idx]))
       (let [e-idx (idx/new-index-store-index
                    (new-range-filter
+                    range-filters
                     (constantly [a :e])
                     (fn [k]
                       (db/ae nested-index-snapshot attr-buffer k))))
             v-idx (idx/new-index-store-index
                    (new-range-filter
+                    range-filters
                     (fn []
                       [a :e (mem/copy-to-unpooled-buffer (.key ^IndexStoreIndexState (.state e-idx)))])
                     (fn [k]
@@ -1786,7 +1788,8 @@
                             ^ScheduledExecutorService interrupt-executor
                             conform-cache query-cache projection-cache
                             index-snapshot
-                            entity-resolver-fn]
+                            entity-resolver-fn
+                            range-filters]
   Closeable
   (close [_]
     (when index-snapshot
@@ -1936,7 +1939,8 @@
                                                                    :query-engine this})
                                    :valid-time valid-time
                                    :tx-time (:crux.tx/tx-time resolved-tx)
-                                   :tx-id (:crux.tx/tx-id resolved-tx)))))
+                                   :tx-id (:crux.tx/tx-id resolved-tx)
+                                   :range-filters (HashMap.)))))
 
   (open-db [this] (api/open-db this nil nil))
   (open-db [this valid-time tx-time] (api/open-db this {:crux.db/valid-time valid-time, :crux.tx/tx-time tx-time}))

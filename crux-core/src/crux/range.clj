@@ -69,10 +69,13 @@
           (.addLong start)
           (.addLong end)))))
 
+(defn ->range-filter ^org.roaringbitmap.longlong.Roaring64Bitmap []
+  (Roaring64Bitmap.))
+
 (deftype FilteredSet [^NavigableSet s ^Roaring64Bitmap bm])
 
 (defn ->fs ^crux.range.FilteredSet []
-  (FilteredSet. (TreeSet. mem/buffer-comparator) (Roaring64Bitmap.)))
+  (FilteredSet. (TreeSet. mem/buffer-comparator) (->range-filter)))
 
 (defn fs-add ^crux.range.FilteredSet [^FilteredSet fs ^DirectBuffer k]
   (.add ^NavigableSet (.s fs) k)
