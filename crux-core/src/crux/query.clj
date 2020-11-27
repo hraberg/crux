@@ -540,42 +540,51 @@
                                   arg))
                            or-join-vars)}))
 
-(defn- new-range-filter [^Map range-filters cache-k-fn seek-fn]
-  (fn step [k]
-    (let [[bm ^Map cache]
-          (.computeIfAbsent range-filters
-                            (cache-k-fn)
-                            (reify Function
-                              (apply [_ _]
-                                [(rng/->range-filter)
-                                 (HashMap.)])))
-          k-long (if k
-                   (rng/buffer->long k)
-                   0)]
-      (if (rng/range-may-contain? bm k-long)
-        (let [xs (when-let [x (.getOrDefault cache k-long ::not-found)]
-                   (if (or (= ::not-found x) (not (mem/buffers=? x k)))
-                     (seek-fn k)
-                     (cons x (lazy-seq
-                              (seek-fn (mem/inc-unsigned-buffer! (mem/copy-to-unpooled-buffer x)))))))
-              x (first xs)
-              x-long (if x
-                       (rng/buffer->long x)
-                       -1)]
-          (if (not= k-long x-long)
-            (do (rng/insert-empty-range bm k-long x-long)
-                (.put cache x-long (when x
-                                     (mem/copy-to-unpooled-buffer x))))
-            (when x
-              (if-let [kc (.get cache k-long)]
-                (when (neg? (mem/compare-buffers k kc))
-                  (.put cache k-long (mem/copy-to-unpooled-buffer k)))
-                (.put cache k-long (mem/copy-to-unpooled-buffer k)))))
-          xs)
-        (when-let [next-k-long (rng/seek-higher bm k-long)]
-          (when-let [x (.get cache next-k-long)]
-            (cons x (lazy-seq
-                     (seek-fn (mem/inc-unsigned-buffer! (mem/copy-to-unpooled-buffer x)))))))))))
+(defn- new-range-filter [seek-fn]
+  (let [bm (rng/->range-filter)
+        cache (HashMap.)]
+    (fn step [k]
+      (let [k-long (if k
+                     (rng/buffer->long k)
+                     0)]
+        (if (rng/range-may-contain? bm k-long)
+          (let [xs (seek-fn k)
+                x (first xs)
+                x-long (if x
+                         (rng/buffer->long x)
+                         -1)]
+            (when (not= k-long x-long)
+              (rng/insert-empty-range bm k-long x-long)
+              (.put cache x-long (when x
+                                   (mem/copy-to-unpooled-buffer x))))
+            xs)
+          #_(when-let [x (.getOrDefault cache k-long ::not-found)]
+              (if (or (= ::not-found x) (not (mem/buffers=? x k)))
+                (let [xs (seek-fn k)
+                      x (first xs)
+                      x-long (if x
+                               (rng/buffer->long x)
+                               -1)]
+                  (if (not= k-long x-long)
+                    (do (rng/insert-empty-range bm k-long x-long)
+                        (.put cache x-long (when x
+                                             (mem/copy-to-unpooled-buffer x))))
+                    (when x
+                      (if-let [kc (.get cache k-long)]
+                        (when (neg? (mem/compare-buffers k kc))
+                          (.put cache k-long (mem/copy-to-unpooled-buffer k)))
+                        (.put cache k-long (mem/copy-to-unpooled-buffer k)))))
+                  xs)
+                (cons x (lazy-seq
+                         (step (mem/inc-unsigned-buffer! (mem/copy-to-unpooled-buffer x)))))))
+          (when-let [next-k-long (rng/seek-higher bm k-long)]
+            (when (not= -1 next-k-long)
+              (when-let [x (let [next-k ^org.agrona.DirectBuffer (rng/long->buffer next-k-long)]
+                             (if (< (.capacity next-k) Long/BYTES)
+                               next-k
+                               (.get cache next-k-long)))]
+                (cons x (lazy-seq
+                         (step (mem/inc-unsigned-buffer! (mem/copy-to-unpooled-buffer x)))))))))))))
 
 (defn- new-binary-index [{:keys [e a v] :as clause} {:keys [entity-resolver-fn range-filters]} index-snapshot {:keys [vars-in-join-order]}]
   (let [order (keep #{e v} vars-in-join-order)
@@ -584,32 +593,20 @@
     (if (= v (first order))
       (let [v-idx (idx/new-index-store-index
                    (new-range-filter
-                    range-filters
-                    (constantly [a :v])
                     (fn [k]
                       (db/av nested-index-snapshot attr-buffer k))))
             e-idx (idx/new-index-store-index
-                   (new-range-filter
-                    range-filters
-                    (fn []
-                      [a :v (mem/copy-to-unpooled-buffer (.key ^IndexStoreIndexState (.state v-idx)))])
-                    (fn [k]
-                      (db/ave nested-index-snapshot attr-buffer (.key ^IndexStoreIndexState (.state v-idx)) k entity-resolver-fn))))]
+                   (fn [k]
+                     (db/ave nested-index-snapshot attr-buffer (.key ^IndexStoreIndexState (.state v-idx)) k entity-resolver-fn)))]
         (log/debug :join-order :ave (cio/pr-edn-str v) e (cio/pr-edn-str clause))
         (idx/new-n-ary-join-layered-virtual-index [v-idx e-idx]))
       (let [e-idx (idx/new-index-store-index
                    (new-range-filter
-                    range-filters
-                    (constantly [a :e])
                     (fn [k]
                       (db/ae nested-index-snapshot attr-buffer k))))
             v-idx (idx/new-index-store-index
-                   (new-range-filter
-                    range-filters
-                    (fn []
-                      [a :e (mem/copy-to-unpooled-buffer (.key ^IndexStoreIndexState (.state e-idx)))])
-                    (fn [k]
-                      (db/aev nested-index-snapshot attr-buffer (.key ^IndexStoreIndexState (.state e-idx)) k entity-resolver-fn))))]
+                   (fn [k]
+                     (db/aev nested-index-snapshot attr-buffer (.key ^IndexStoreIndexState (.state e-idx)) k entity-resolver-fn)))]
         (log/debug :join-order :aev e (cio/pr-edn-str v) (cio/pr-edn-str clause))
         (idx/new-n-ary-join-layered-virtual-index [e-idx v-idx])))))
 
