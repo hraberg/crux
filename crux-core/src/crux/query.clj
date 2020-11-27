@@ -555,28 +555,9 @@
                          -1)]
             (when (not= k-long x-long)
               (rng/insert-empty-range bm k-long x-long)
-              (.put cache x-long (when x
-                                   (mem/copy-to-unpooled-buffer x))))
+              (when x
+                (.put cache x-long (mem/copy-to-unpooled-buffer x))))
             xs)
-          #_(when-let [x (.getOrDefault cache k-long ::not-found)]
-              (if (or (= ::not-found x) (not (mem/buffers=? x k)))
-                (let [xs (seek-fn k)
-                      x (first xs)
-                      x-long (if x
-                               (rng/buffer->long x)
-                               -1)]
-                  (if (not= k-long x-long)
-                    (do (rng/insert-empty-range bm k-long x-long)
-                        (.put cache x-long (when x
-                                             (mem/copy-to-unpooled-buffer x))))
-                    (when x
-                      (if-let [kc (.get cache k-long)]
-                        (when (neg? (mem/compare-buffers k kc))
-                          (.put cache k-long (mem/copy-to-unpooled-buffer k)))
-                        (.put cache k-long (mem/copy-to-unpooled-buffer k)))))
-                  xs)
-                (cons x (lazy-seq
-                         (step (mem/inc-unsigned-buffer! (mem/copy-to-unpooled-buffer x)))))))
           (when-let [next-k-long (rng/seek-higher bm k-long)]
             (when (not= -1 next-k-long)
               (when-let [x (let [next-k ^org.agrona.DirectBuffer (rng/long->buffer next-k-long)]
