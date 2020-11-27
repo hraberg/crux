@@ -40,9 +40,10 @@
         (recur (dec n))))))
 
 (defn seek-higher [^Roaring64Bitmap bm ^long k]
-  (let [rank (.rankLong bm k)]
-    (when (< rank (.getLongCardinality bm))
-      (.select bm rank))))
+  (when-not (= -1 k)
+    (let [rank (.rankLong bm k)]
+      (when (neg? (Long/compareUnsigned rank (.getLongCardinality bm)))
+        (.select bm rank)))))
 
 (defn range-may-contain? [^Roaring64Bitmap bm ^long k]
   (even? (.rankLong bm k)))
