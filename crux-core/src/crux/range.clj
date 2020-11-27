@@ -706,3 +706,11 @@
 ;;         }
 ;;     }
 ;; }
+
+(comment
+
+  (let [base  [4 0 1 -15 -1 -12 1 0 0 0 0 0 0 0 -9]
+        check [0 0 7   3  3   3 1 0 0 0 0 0 0 0 1]
+        tail [\h \e \l \o \r 0 0 0 \a \r 0 \g \e 0 \y 0]]
+    (assert (= 7 (+ (long (get base 0)) 3)))
+    (assert (= (get check 6) 1))))
