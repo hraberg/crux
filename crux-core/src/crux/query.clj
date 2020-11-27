@@ -559,13 +559,12 @@
                 (.put cache x-long (mem/copy-to-unpooled-buffer x))))
             xs)
           (when-let [next-k-long (rng/seek-higher bm k-long)]
-            (when (not= -1 next-k-long)
-              (when-let [x (let [next-k ^org.agrona.DirectBuffer (rng/long->buffer next-k-long)]
-                             (if (< (.capacity next-k) Long/BYTES)
-                               next-k
-                               (.get cache next-k-long)))]
-                (cons x (lazy-seq
-                         (step (mem/inc-unsigned-buffer! (mem/copy-to-unpooled-buffer x)))))))))))))
+            (when-let [x (let [next-k ^org.agrona.DirectBuffer (rng/long->buffer next-k-long)]
+                           (if (< (.capacity next-k) Long/BYTES)
+                             next-k
+                             (.get cache next-k-long)))]
+              (cons x (lazy-seq
+                       (step (mem/inc-unsigned-buffer! (mem/copy-to-unpooled-buffer x))))))))))))
 
 (defn- new-binary-index [{:keys [e a v] :as clause} {:keys [entity-resolver-fn range-filters]} index-snapshot {:keys [vars-in-join-order]}]
   (let [order (keep #{e v} vars-in-join-order)
