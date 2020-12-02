@@ -162,10 +162,9 @@
         (.get ^Map (.cache fs) next-k)))))
 
 (defn fs-intersect-sets [xs]
-  (let [xs (sort-by #(first (.s ^crux.range.FilteredSet %)) mem/buffer-comparator xs)
-        keys (object-array (map #(first (.s ^crux.range.FilteredSet %)) xs))
-        sets (object-array xs)
-        len (count xs)
+  (let [sets (to-array (sort-by #(first (.s ^crux.range.FilteredSet %)) mem/buffer-comparator xs))
+        keys (object-array (map #(first (.s ^crux.range.FilteredSet %)) sets))
+        len (alength sets)
         acc (ArrayList.)]
     (loop [n 0
            max-k (aget keys (dec len))]
@@ -202,6 +201,7 @@
         bm-fn (fn []
                 (vec (for [[n ^FilteredSet idx] (map-indexed vector indexes)]
                        {:idx-name n
+                        :cache-size (count (.cache idx))
                         :cardinality-bm (.getLongCardinality ^Roaring64NavigableMap (.bm idx))
                         :size-in-bytes-bm (.serializedSizeInBytes ^Roaring64NavigableMap (.bm idx))
                         :cardinality-cr (.getLongCardinality ^Roaring64NavigableMap (.cr idx))
@@ -218,7 +218,7 @@
                          :match (= r expected)
                          :seeks @*seeks*
                          :range-filters (bm-fn)})))]
-    (clojure.pprint/pprint (binding [*io-cost-ms* 1]
+    (clojure.pprint/pprint (binding [*io-cost-ms* 0]
                              [(do-run-fn "cold-run")
                               (do-run-fn "warm-run")
                               (do (doseq [idx indexes]
@@ -253,6 +253,14 @@
         c-idx (->fs (doto (TreeSet. mem/buffer-comparator)
                       (.addAll (map c/->value-buffer (map #(format "%08x" %)
                                                           (repeatedly 10000 #(rand-int 100000)))))))]
+    (test-sets [a-idx b-idx c-idx]))
+
+  (let [a-idx (->fs (doto (TreeSet. mem/buffer-comparator)
+                      (.addAll (map c/->value-buffer (repeatedly 100000 #(rand-int 1000000))))))
+        b-idx (->fs (doto (TreeSet. mem/buffer-comparator)
+                      (.addAll (map c/->value-buffer (repeatedly 100000 #(rand-int 1000000))))))
+        c-idx (->fs (doto (TreeSet. mem/buffer-comparator)
+                      (.addAll (map c/->value-buffer (repeatedly 100000 #(rand-int 1000000))))))]
     (test-sets [a-idx b-idx c-idx])))
 
 (comment
