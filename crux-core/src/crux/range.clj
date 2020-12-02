@@ -236,6 +236,15 @@
     (test-sets indexes))
 
   (let [a-idx (->fs (doto (TreeSet. mem/buffer-comparator)
+                      (.addAll (map c/->value-buffer [0 1 3 4 5 6 7 8 9 11 12]))))
+        b-idx (->fs (doto (TreeSet. mem/buffer-comparator)
+                      (.addAll (map c/->value-buffer [0 2 6 7 8 9 12]))))
+        c-idx (->fs (doto (TreeSet. mem/buffer-comparator)
+                      (.addAll (map c/->value-buffer [2 4 5 8 10 12]))))
+        indexes [a-idx b-idx c-idx]]
+    (test-sets indexes))
+
+  (let [a-idx (->fs (doto (TreeSet. mem/buffer-comparator)
                       (.addAll (map c/->value-buffer (map #(format "%08x" %)
                                                           (repeatedly 10000 #(rand-int 100000)))))))
         b-idx (->fs (doto (TreeSet. mem/buffer-comparator)
