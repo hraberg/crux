@@ -238,7 +238,7 @@
           tx-time (c/reverse-time-ms->date (.getLong k (+ c/index-id-size c/id-size Long/BYTES Long/BYTES) ByteOrder/BIG_ENDIAN))]
       (c/->EntityTx entity valid-time tx-time tx-id nil))))
 
-(defn- decode-bitemp-key-as-tx-id-from ^java.util.Date [^DirectBuffer k]
+(defn- decode-bitemp-key-as-tx-id-from ^long [^DirectBuffer k]
   (c/descending-long (.getLong k (+ c/index-id-size c/id-size Long/BYTES) ByteOrder/BIG_ENDIAN)))
 
 (defn- encode-entity-tx-z-number [valid-time tx-id]
@@ -596,7 +596,8 @@
 
   (entity-as-of-resolver [this eid valid-time tx-id]
     (assert tx-id)
-    (let [i @entity-as-of-iterator-delay
+    (let [tx-id (long tx-id)
+          i @entity-as-of-iterator-delay
           prefix-size (+ c/index-id-size c/id-size)
           eid (if (instance? DirectBuffer eid)
                 (if (c/id-buffer? eid)
@@ -611,7 +612,7 @@
                                        nil)]
       (loop [k (kv/seek i seek-k)]
         (when (and k (mem/buffers=? seek-k k prefix-size))
-          (if (<= (compare (decode-bitemp-key-as-tx-id-from k) tx-id) 0)
+          (if (<= (decode-bitemp-key-as-tx-id-from k) tx-id)
             (let [v (kv/value i)]
               (when-not (mem/buffers=? c/nil-id-buffer v)
                 v))
