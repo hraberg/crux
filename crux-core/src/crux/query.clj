@@ -543,18 +543,20 @@
         attr-buffer (mem/copy-to-unpooled-buffer (c/->id-buffer a))]
     (if (= v (first order))
       (let [v-idx (idx/new-deref-index
-                   (idx/new-seek-fn-index
-                    (fn [k]
-                      (db/av nested-index-snapshot attr-buffer k))))
+                   (idx/new-filtered-index
+                    (idx/new-seek-fn-index
+                     (fn [k]
+                       (db/av nested-index-snapshot attr-buffer k)))))
             e-idx (idx/new-seek-fn-index
                    (fn [k]
                      (db/ave nested-index-snapshot attr-buffer (.deref v-idx) k entity-resolver-fn)))]
         (log/debug :join-order :ave (cio/pr-edn-str v) e (cio/pr-edn-str clause))
         (idx/new-n-ary-join-layered-virtual-index [v-idx e-idx]))
       (let [e-idx (idx/new-deref-index
-                   (idx/new-seek-fn-index
-                    (fn [k]
-                      (db/ae nested-index-snapshot attr-buffer k))))
+                   (idx/new-filtered-index
+                    (idx/new-seek-fn-index
+                     (fn [k]
+                       (db/ae nested-index-snapshot attr-buffer k)))))
             v-idx (idx/new-seek-fn-index
                    (fn [k]
                      (db/aev nested-index-snapshot attr-buffer (.deref e-idx) k entity-resolver-fn)))]

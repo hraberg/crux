@@ -59,20 +59,18 @@
 (defn remove-range ^org.roaringbitmap.longlong.Roaring64NavigableMap [^Roaring64NavigableMap bm ^long start ^long end]
   (let [start-rank (.rankLong bm start)
         end-rank (.rankLong bm end)
-        ns (unchecked-subtract (unchecked-inc end-rank) start-rank)]
+        ns (unchecked-inc (unchecked-subtract end-rank start-rank))]
     (dotimes [n ns]
       (let [n (unchecked-dec (unchecked-subtract end-rank n))]
         (when (neg? (Long/compareUnsigned n (.getLongCardinality bm)))
           (let [candidate (.select bm n)]
-            (when (and (not (pos? (Long/compareUnsigned start candidate)))
-                       (neg? (Long/compareUnsigned candidate end)))
+            (when (neg? (Long/compareUnsigned candidate end))
               (.removeLong bm candidate))))))
     bm))
 
 (defn insert-empty-range ^org.roaringbitmap.longlong.Roaring64NavigableMap [^Roaring64NavigableMap bm ^long start ^long end]
   (when-not (or (and (.contains bm end) (not (range-may-contain? bm start)))
                 (= start end))
-
     (doto ^Roaring64NavigableMap (remove-range bm start end)
       (.addLong start)
       (.addLong end))))

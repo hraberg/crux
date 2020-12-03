@@ -1,10 +1,12 @@
 (ns ^:no-doc crux.index
   (:require [crux.db :as db]
-            [crux.memory :as mem])
+            [crux.memory :as mem]
+            [crux.range :as rng])
   (:import [clojure.lang Box IDeref]
            java.util.function.Function
-           [java.util ArrayList Arrays Collection Comparator Iterator List NavigableSet NavigableMap TreeMap TreeSet]
-           org.agrona.DirectBuffer))
+           [java.util ArrayList Arrays Collection Comparator HashMap Iterator List Map NavigableSet NavigableMap TreeMap TreeSet]
+           org.agrona.DirectBuffer
+           org.roaringbitmap.longlong.Roaring64NavigableMap))
 
 (set! *unchecked-math* :warn-on-boxed)
 
@@ -53,6 +55,60 @@
 
 (defn new-seek-fn-index ^crux.index.SeekFnIndex [seek-fn]
   (->SeekFnIndex seek-fn nil))
+
+(declare fi-seek-exact)
+
+(deftype FilteredIndex [idx ^Roaring64NavigableMap bm ^Roaring64NavigableMap cr ^Map cache ^:unsynchronized-mutable seek-k]
+  db/Index
+  (seek-values [this k]
+    (doto (let [k-long (rng/buffer->long (or k mem/empty-buffer))]
+            (if (or (rng/range-may-contain? bm k-long)
+                    (.contains cr k-long))
+              (fi-seek-exact this k)
+              (when-let [next-k (rng/seek-higher bm k-long)]
+                (.get cache next-k))))
+      (->> (set! seek-k))))
+
+  (next-values [this]
+    (when seek-k
+      (fi-seek-exact this seek-k)
+      (set! seek-k nil))
+    (db/next-values idx))
+
+  db/LayeredIndex
+  (open-level [_]
+    (db/open-level idx))
+
+  (close-level [_]
+    (db/close-level idx))
+
+  (max-depth [_]
+    (db/max-depth idx)))
+
+(defn- fi-seek-exact ^org.agrona.DirectBuffer [^FilteredIndex f ^DirectBuffer k]
+  (let [found (db/seek-values (.idx f) k)
+        end (if (nil? found)
+              -1
+              (rng/buffer->long found))]
+    (when found
+      (.addLong ^Roaring64NavigableMap (.cr f) end))
+    (let [cache ^Map (.cache f)
+          x (.get cache end)]
+      (when (or (nil? x) (neg? (mem/compare-buffers found x)))
+        (.put cache end found)))
+    (when-not (= k found)
+      (let [start (long (loop [start (if k
+                                       (rng/buffer->long k)
+                                       0)]
+                          (if (.contains ^Roaring64NavigableMap (.cr f) start)
+                            (recur (unchecked-inc start))
+                            start)))]
+        (when (<= start end)
+          (rng/insert-empty-range (.bm f) start end))))
+    found))
+
+(defn new-filtered-index ^crux.index.FilteredIndex [idx]
+  (->FilteredIndex idx (rng/->range-filter) (rng/->range-filter) (HashMap.) nil))
 
 ;; Range Constraints
 
