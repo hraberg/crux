@@ -537,26 +537,38 @@
                                   arg))
                            or-join-vars)}))
 
-(defn- new-binary-index [{:keys [e a v] :as clause} {:keys [entity-resolver-fn]} index-snapshot {:keys [vars-in-join-order]}]
+(defn- new-binary-index [{:keys [e a v] :as clause} {:keys [entity-resolver-fn range-cache]} index-snapshot {:keys [vars-in-join-order]}]
   (let [order (keep #{e v} vars-in-join-order)
         nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)
         attr-buffer (mem/copy-to-unpooled-buffer (c/->id-buffer a))]
     (if (= v (first order))
-      (let [v-idx (idx/new-deref-index
+      (let [[bm cr cache] (get (swap! range-cache update [a :v] (fn [x]
+                                                                  (or x [(crux.range/->range-filter)
+                                                                         (crux.range/->range-filter)
+                                                                         (java.util.HashMap.)])))
+                               [a :v])
+            v-idx (idx/new-deref-index
                    (idx/new-filtered-index
                     (idx/new-seek-fn-index
                      (fn [k]
-                       (db/av nested-index-snapshot attr-buffer k)))))
+                       (db/av nested-index-snapshot attr-buffer k)))
+                    bm cr cache))
             e-idx (idx/new-seek-fn-index
                    (fn [k]
                      (db/ave nested-index-snapshot attr-buffer (.deref v-idx) k entity-resolver-fn)))]
         (log/debug :join-order :ave (cio/pr-edn-str v) e (cio/pr-edn-str clause))
         (idx/new-n-ary-join-layered-virtual-index [v-idx e-idx]))
-      (let [e-idx (idx/new-deref-index
+      (let [[bm cr cache] (get (swap! range-cache update [a :e] (fn [x]
+                                                                  (or x [(crux.range/->range-filter)
+                                                                         (crux.range/->range-filter)
+                                                                         (java.util.HashMap.)])))
+                               [a :e])
+            e-idx (idx/new-deref-index
                    (idx/new-filtered-index
                     (idx/new-seek-fn-index
                      (fn [k]
-                       (db/ae nested-index-snapshot attr-buffer k)))))
+                       (db/ae nested-index-snapshot attr-buffer k)))
+                    bm cr cache))
             v-idx (idx/new-seek-fn-index
                    (fn [k]
                      (db/aev nested-index-snapshot attr-buffer (.deref e-idx) k entity-resolver-fn)))]
@@ -1734,7 +1746,8 @@
                             ^ScheduledExecutorService interrupt-executor
                             conform-cache query-cache projection-cache
                             index-snapshot
-                            entity-resolver-fn]
+                            entity-resolver-fn
+                            range-cache]
   Closeable
   (close [_]
     (when index-snapshot
@@ -1884,7 +1897,8 @@
                                                                    :query-engine this})
                                    :valid-time valid-time
                                    :tx-time (:crux.tx/tx-time resolved-tx)
-                                   :tx-id (:crux.tx/tx-id resolved-tx)))))
+                                   :tx-id (:crux.tx/tx-id resolved-tx)
+                                   :range-cache (atom {})))))
 
   (open-db [this] (api/open-db this nil nil))
   (open-db [this valid-time tx-time] (api/open-db this {:crux.db/valid-time valid-time, :crux.tx/tx-time tx-time}))
