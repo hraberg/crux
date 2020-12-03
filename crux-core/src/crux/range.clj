@@ -79,13 +79,13 @@
 (defn ->range-filter ^org.roaringbitmap.longlong.Roaring64NavigableMap []
   (Roaring64NavigableMap.))
 
-(deftype FilteredSet [^NavigableSet s ^Roaring64NavigableMap bm ^Roaring64NavigableMap cr ^Map cache])
+(deftype FilteredSet [^NavigableSet s ^Roaring64NavigableMap bm ^Map cache])
 
 (defn ->fs
   (^crux.range.FilteredSet []
    (->fs (TreeSet. mem/buffer-comparator)))
   (^crux.range.FilteredSet [^NavigableSet s]
-   (FilteredSet. s (->range-filter) (->range-filter) (HashMap.))))
+   (FilteredSet. s (->range-filter) (HashMap.))))
 
 (defn fs-add ^crux.range.FilteredSet [^FilteredSet fs ^DirectBuffer k]
   (.add ^NavigableSet (.s fs) k)
@@ -125,22 +125,20 @@
         end (if (nil? found)
               -1
               (buffer->long found))]
-    (when found
-      (.addLong ^Roaring64NavigableMap (.cr fs) (buffer->long found)))
+    (let [cache ^Map (.cache fs)
+          x (.get cache end)]
+      (when (or (nil? x) (neg? (mem/compare-buffers found x)))
+        (.put ^Map (.cache fs) end found)))
     (when-not (= k found)
       (let [start (if k
                     (buffer->long k)
                     0)
             start (long (loop [start start]
-                          (if (.contains ^Roaring64NavigableMap (.cr fs) start)
+                          (if (.containsKey ^Map (.cache fs) start)
                             (recur (unchecked-inc start))
                             start)))]
         (when (<= start end)
           (insert-empty-range (.bm fs) start end))))
-    (let [cache ^Map (.cache fs)
-          x (.get cache end)]
-      (when (or (nil? x) (neg? (mem/compare-buffers found x)))
-        (.put ^Map (.cache fs) end found)))
     found))
 
 (defn fs-contains? [^FilteredSet fs ^DirectBuffer k]
@@ -155,7 +153,7 @@
 (defn fs-ceiling ^org.agrona.DirectBuffer [^FilteredSet fs ^DirectBuffer k]
   (let [k-long (buffer->long k)]
     (if (or (range-may-contain? (.bm fs) k-long)
-            (.contains ^Roaring64NavigableMap (.cr fs) k-long))
+            (.containsKey ^Map (.cache fs) k-long))
       (do (swap! *seeks* inc)
           (Thread/sleep *io-cost-ms*)
           (fs-seek-exact fs k))
@@ -204,9 +202,7 @@
                        {:idx-name n
                         :cache-size (count (.cache idx))
                         :cardinality-bm (.getLongCardinality ^Roaring64NavigableMap (.bm idx))
-                        :size-in-bytes-bm (.serializedSizeInBytes ^Roaring64NavigableMap (.bm idx))
-                        :cardinality-cr (.getLongCardinality ^Roaring64NavigableMap (.cr idx))
-                        :size-in-bytes-cr (.serializedSizeInBytes ^Roaring64NavigableMap (.cr idx))})))
+                        :size-in-bytes-bm (.serializedSizeInBytes ^Roaring64NavigableMap (.bm idx))})))
         do-run-fn (fn [run-name]
                     (binding [*seeks* (atom 0)
                               *nexts* (atom 0)]

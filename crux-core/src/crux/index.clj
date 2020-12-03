@@ -58,12 +58,12 @@
 
 (declare fi-seek-exact)
 
-(deftype FilteredIndex [idx ^Roaring64NavigableMap bm ^Roaring64NavigableMap cr ^Map cache ^:unsynchronized-mutable seek-k]
+(deftype FilteredIndex [idx ^Roaring64NavigableMap bm ^Map cache ^:unsynchronized-mutable seek-k]
   db/Index
   (seek-values [this k]
     (let [k-long (rng/buffer->long (or k mem/empty-buffer))]
       (if (or (rng/range-may-contain? bm k-long)
-              (.contains cr k-long))
+              (.containsKey cache k-long))
         (fi-seek-exact this k)
         (doto (when-let [next-k (rng/seek-higher bm k-long)]
                 (.get cache next-k))
@@ -90,8 +90,6 @@
         end (if (nil? found)
               -1
               (rng/buffer->long found))]
-    (when found
-      (.addLong ^Roaring64NavigableMap (.cr f) end))
     (let [cache ^Map (.cache f)
           x (.get cache end)]
       (when (or (nil? x) (neg? (mem/compare-buffers found x)))
@@ -100,17 +98,17 @@
       (loop [start (if k
                      (rng/buffer->long k)
                      0)]
-        (if (.contains ^Roaring64NavigableMap (.cr f) start)
-          (recur (unchecked-inc start))
-          (when (and (<= start end))
-            (rng/insert-empty-range (.bm f) start end)))))
+        (if (.containsKey ^Map (.cache f) start)
+            (recur (unchecked-inc start))
+            (when (and (<= start end))
+              (rng/insert-empty-range (.bm f) start end)))))
     found))
 
 (defn new-filtered-index
   (^crux.index.FilteredIndex [idx]
-   (new-filtered-index idx (rng/->range-filter) (rng/->range-filter) (HashMap.)))
-  (^crux.index.FilteredIndex [idx bm cr cache]
-   (->FilteredIndex idx bm cr cache nil)))
+   (new-filtered-index idx (rng/->range-filter) (HashMap.)))
+  (^crux.index.FilteredIndex [idx bm cache]
+   (->FilteredIndex idx bm cache nil)))
 
 ;; Range Constraints
 

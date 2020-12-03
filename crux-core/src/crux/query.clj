@@ -15,6 +15,7 @@
             [crux.api :as api]
             [crux.tx :as tx]
             [crux.error :as err]
+            [crux.range :as rng]
             [crux.tx.conform :as txc]
             [taoensso.nippy :as nippy]
             [edn-query-language.core :as eql]
@@ -24,7 +25,8 @@
            (crux.api ICruxDatasource HistoryOptions HistoryOptions$SortOrder)
            crux.codec.EntityTx
            (java.io Closeable Writer)
-           (java.util Collection Comparator Date List UUID)
+           java.util.function.Function
+           (java.util Collection Comparator Date HashMap List Map UUID)
            (java.util.concurrent Future Executors ScheduledExecutorService TimeoutException TimeUnit)))
 
 (defn logic-var? [x]
@@ -537,38 +539,40 @@
                                   arg))
                            or-join-vars)}))
 
-(defn- new-binary-index [{:keys [e a v] :as clause} {:keys [entity-resolver-fn range-cache]} index-snapshot {:keys [vars-in-join-order]}]
+(defn- new-binary-index [{:keys [e a v] :as clause} {:keys [entity-resolver-fn ^Map range-cache]} index-snapshot {:keys [vars-in-join-order]}]
   (let [order (keep #{e v} vars-in-join-order)
         nested-index-snapshot (db/open-nested-index-snapshot index-snapshot)
         attr-buffer (mem/copy-to-unpooled-buffer (c/->id-buffer a))]
     (if (= v (first order))
-      (let [[bm cr cache] (get (swap! range-cache update [a :v] (fn [x]
-                                                                  (or x [(crux.range/->range-filter)
-                                                                         (crux.range/->range-filter)
-                                                                         (java.util.HashMap.)])))
-                               [a :v])
+      (let [[bm cache] (.computeIfAbsent range-cache
+                                         [a :v]
+                                         (reify Function
+                                           (apply [_ _]
+                                             [(rng/->range-filter)
+                                              (HashMap.)])))
             v-idx (idx/new-deref-index
                    (idx/new-filtered-index
                     (idx/new-seek-fn-index
                      (fn [k]
                        (db/av nested-index-snapshot attr-buffer k)))
-                    bm cr cache))
+                    bm cache))
             e-idx (idx/new-seek-fn-index
                    (fn [k]
                      (db/ave nested-index-snapshot attr-buffer (.deref v-idx) k entity-resolver-fn)))]
         (log/debug :join-order :ave (cio/pr-edn-str v) e (cio/pr-edn-str clause))
         (idx/new-n-ary-join-layered-virtual-index [v-idx e-idx]))
-      (let [[bm cr cache] (get (swap! range-cache update [a :e] (fn [x]
-                                                                  (or x [(crux.range/->range-filter)
-                                                                         (crux.range/->range-filter)
-                                                                         (java.util.HashMap.)])))
-                               [a :e])
+      (let [[bm cache] (.computeIfAbsent range-cache
+                                         [a :e]
+                                         (reify Function
+                                           (apply [_ _]
+                                             [(rng/->range-filter)
+                                              (HashMap.)])))
             e-idx (idx/new-deref-index
                    (idx/new-filtered-index
                     (idx/new-seek-fn-index
                      (fn [k]
                        (db/ae nested-index-snapshot attr-buffer k)))
-                    bm cr cache))
+                    bm cache))
             v-idx (idx/new-seek-fn-index
                    (fn [k]
                      (db/aev nested-index-snapshot attr-buffer (.deref e-idx) k entity-resolver-fn)))]
@@ -1898,7 +1902,7 @@
                                    :valid-time valid-time
                                    :tx-time (:crux.tx/tx-time resolved-tx)
                                    :tx-id (:crux.tx/tx-id resolved-tx)
-                                   :range-cache (atom {})))))
+                                   :range-cache (HashMap.)))))
 
   (open-db [this] (api/open-db this nil nil))
   (open-db [this valid-time tx-time] (api/open-db this {:crux.db/valid-time valid-time, :crux.tx/tx-time tx-time}))
