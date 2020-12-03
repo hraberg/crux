@@ -14,7 +14,7 @@
            java.nio.ByteBuffer
            (java.nio.file Files Path)
            java.nio.file.attribute.FileAttribute
-           (org.rocksdb Checkpoint CompressionType FlushOptions LRUCache
+           (org.rocksdb BlockBasedTableConfig BloomFilter Checkpoint CompressionType FlushOptions LRUCache
                         Options ReadOptions RocksDB RocksIterator
                         WriteBatch WriteOptions Statistics StatsLevel)))
 
@@ -131,8 +131,11 @@
                                            :spec #(instance? Options %)}
                               :disable-wal? {:doc "Disable Write Ahead Log"
                                              :default false
-                                             :spec ::sys/boolean}}}
-  [{:keys [^Path db-dir sync? disable-wal? metrics checkpointer db-options] :as options}]
+                                             :spec ::sys/boolean}
+                              :block-cache-size {:doc "Block cache size"
+                                                 :default default-block-cache-size
+                                                 :spec ::sys/pos-int}}}
+  [{:keys [^Path db-dir sync? disable-wal? metrics checkpointer db-options block-cache-size] :as options}]
 
   (RocksDB/loadLibrary)
 
@@ -144,7 +147,12 @@
                (cond-> metrics (.setStatistics stats))
                (.setCompressionType CompressionType/LZ4_COMPRESSION)
                (.setBottommostCompressionType CompressionType/ZSTD_COMPRESSION)
-               (.setCreateIfMissing true))
+               (.setCreateIfMissing true)
+               (.setTableFormatConfig (cond-> (doto (BlockBasedTableConfig.)
+                                                (.setPinL0FilterAndIndexBlocksInCache true)
+                                                (.setCacheIndexAndFilterBlocks true))
+                                        block-cache-size (.setBlockCacheSize block-cache-size)
+)))
 
         db (try
              (RocksDB/open opts (-> (Files/createDirectories db-dir (make-array FileAttribute 0))
