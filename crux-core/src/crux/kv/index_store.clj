@@ -596,8 +596,7 @@
 
   (entity-as-of-resolver [this eid valid-time tx-id]
     (assert tx-id)
-    (let [tx-id (long tx-id)
-          i @entity-as-of-iterator-delay
+    (let [i @entity-as-of-iterator-delay
           prefix-size (+ c/index-id-size c/id-size)
           eid (if (instance? DirectBuffer eid)
                 (if (c/id-buffer? eid)
@@ -612,7 +611,7 @@
                                        nil)]
       (loop [k (kv/seek i seek-k)]
         (when (and k (mem/buffers=? seek-k k prefix-size))
-          (if (<= (decode-bitemp-key-as-tx-id-from k) tx-id)
+          (if (<= (decode-bitemp-key-as-tx-id-from k) (long tx-id))
             (let [v (kv/value i)]
               (when-not (mem/buffers=? c/nil-id-buffer v)
                 v))

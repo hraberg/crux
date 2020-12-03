@@ -1541,7 +1541,9 @@
       (cache/compute-if-absent entity-cache k mem/copy-to-unpooled-buffer entity-resolver-fn))))
 
 (defn- new-entity-resolver-fn [{:keys [valid-time tx-id index-snapshot] :as db}]
-  (with-entity-resolver-cache #(when tx-id (db/entity-as-of-resolver index-snapshot % valid-time tx-id)) db))
+  (with-entity-resolver-cache (if tx-id
+                                #(db/entity-as-of-resolver index-snapshot % valid-time tx-id)
+                                (constantly nil)) db))
 
 (defn- validate-in [in]
   (doseq [binding (:bindings in)
