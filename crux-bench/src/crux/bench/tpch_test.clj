@@ -572,7 +572,7 @@
                        (fn [x y]
                          (cond
                            (and (number? x) (string? y))
-                           (t/is (str/ends-with? y (str x)) msg)
+                           (t/is (str/starts-with? y (str x)) msg)
 
                            (and (number? x) (number? y))
                            (let [epsilon 0.01

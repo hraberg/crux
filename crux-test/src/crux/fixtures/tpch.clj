@@ -58,7 +58,7 @@
                    [(keyword (.getColumnName c))
                     (condp = (.getBase (.getType c))
                       TpchColumnType$Base/IDENTIFIER
-                      (str (str/replace (.getColumnName c) #".+_" "") "_" (.getIdentifier c b))
+                      (str (.getIdentifier c b) "_" (str/replace (.getColumnName c) #".+_" ""))
                       TpchColumnType$Base/INTEGER
                       (long (.getInteger c b))
                       TpchColumnType$Base/VARCHAR
