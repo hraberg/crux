@@ -56,18 +56,24 @@
       (.flip k)
       (.flip (unchecked-inc k)))))
 
+(defn remove-range ^org.roaringbitmap.longlong.Roaring64NavigableMap [^Roaring64NavigableMap bm ^long start ^long end]
+  (let [start-rank (.rankLong bm start)
+        end-rank (.rankLong bm end)
+        ns (unchecked-subtract (unchecked-inc end-rank) start-rank)]
+    (dotimes [n ns]
+      (let [n (unchecked-dec (unchecked-subtract end-rank n))]
+        (when (neg? (Long/compareUnsigned n (.getLongCardinality bm)))
+          (let [candidate (.select bm n)]
+            (when (and (not (pos? (Long/compareUnsigned start candidate)))
+                       (neg? (Long/compareUnsigned candidate end)))
+              (.removeLong bm candidate))))))
+    bm))
+
 (defn insert-empty-range ^org.roaringbitmap.longlong.Roaring64NavigableMap [^Roaring64NavigableMap bm ^long start ^long end]
   (when-not (or (and (.contains bm end) (not (range-may-contain? bm start)))
                 (= start end))
-    (let [start-rank (.rankLong bm start)]
-      (dotimes [n (unchecked-subtract (.rankLong bm end) start-rank)]
-        (let [n (unchecked-add n (unchecked-dec start-rank))]
-          (when (neg? (Long/compareUnsigned n (.getLongCardinality bm)))
-            (let [candidate (.select bm n)]
-              (when (and (not (pos? (Long/compareUnsigned start candidate)))
-                         (neg? (Long/compareUnsigned candidate end)))
-                (.removeLong bm candidate)))))))
-    (doto bm
+
+    (doto ^Roaring64NavigableMap (remove-range bm start end)
       (.addLong start)
       (.addLong end))))
 
@@ -112,12 +118,14 @@
       found)))
 
 (def ^:dynamic *seeks* (atom 0))
+(def ^:dynamic *nexts* (atom 0))
 (def ^:dynamic *io-cost-ms* 0)
 
 (defn fs-seek-exact ^org.agrona.DirectBuffer [^FilteredSet fs ^DirectBuffer k]
-  (let [found (.ceiling ^NavigableSet (.s fs) k)]
-    (swap! *seeks* inc)
-    (Thread/sleep *io-cost-ms*)
+  (let [found (.ceiling ^NavigableSet (.s fs) k)
+        end (if (nil? found)
+              -1
+              (buffer->long found))]
     (when found
       (.addLong ^Roaring64NavigableMap (.cr fs) (buffer->long found)))
     (when-not (= k found)
@@ -127,16 +135,13 @@
             start (long (loop [start start]
                           (if (.contains ^Roaring64NavigableMap (.cr fs) start)
                             (recur (unchecked-inc start))
-                            start)))
-            end (if (nil? found)
-                  -1
-                  (buffer->long found))]
+                            start)))]
         (when (<= start end)
-          (insert-empty-range (.bm fs) start end)
-          (let [cache ^Map (.cache fs)
-                x (.get cache end)]
-            (when (or (nil? x) (neg? (mem/compare-buffers found x)))
-              (.put ^Map (.cache fs) end found))))))
+          (insert-empty-range (.bm fs) start end))))
+    (let [cache ^Map (.cache fs)
+          x (.get cache end)]
+      (when (or (nil? x) (neg? (mem/compare-buffers found x)))
+        (.put ^Map (.cache fs) end found)))
     found))
 
 (defn fs-contains? [^FilteredSet fs ^DirectBuffer k]
@@ -144,20 +149,17 @@
        (= k (fs-seek fs k))))
 
 (defn fs-higher ^org.agrona.DirectBuffer [^FilteredSet fs ^DirectBuffer k]
-  #_(fs-seek-exact fs (mem/inc-unsigned-buffer! (mem/copy-to-unpooled-buffer k)))
-  (let [k-long (buffer->long k)]
-    (if (or (range-may-contain? (.bm fs) k-long)
-            (.contains ^Roaring64NavigableMap (.cr fs) k-long))
-      (fs-seek-exact fs (mem/inc-unsigned-buffer! (mem/copy-to-unpooled-buffer k)))
-      (when-let [next-k (seek-higher (.bm fs) k-long)]
-        (.get ^Map (.cache fs) next-k)))))
+  (swap! *nexts* inc)
+  (Thread/sleep *io-cost-ms*)
+  (.higher ^NavigableSet (.s fs) k))
 
 (defn fs-ceiling ^org.agrona.DirectBuffer [^FilteredSet fs ^DirectBuffer k]
-  #_(fs-seek-exact fs k)
   (let [k-long (buffer->long k)]
     (if (or (range-may-contain? (.bm fs) k-long)
             (.contains ^Roaring64NavigableMap (.cr fs) k-long))
-      (fs-seek-exact fs k)
+      (do (swap! *seeks* inc)
+          (Thread/sleep *io-cost-ms*)
+          (fs-seek-exact fs k))
       (when-let [next-k (seek-higher (.bm fs) k-long)]
         (.get ^Map (.cache fs) next-k)))))
 
@@ -207,7 +209,8 @@
                         :cardinality-cr (.getLongCardinality ^Roaring64NavigableMap (.cr idx))
                         :size-in-bytes-cr (.serializedSizeInBytes ^Roaring64NavigableMap (.cr idx))})))
         do-run-fn (fn [run-name]
-                    (binding [*seeks* (atom 0)]
+                    (binding [*seeks* (atom 0)
+                              *nexts* (atom 0)]
                       (let [start-time (System/currentTimeMillis)
                             r (mapv c/decode-value-buffer (fs-intersect-sets indexes))
                             total-time (- (System/currentTimeMillis) start-time)]
@@ -217,6 +220,7 @@
                          :count [(count r) (count expected)]
                          :match (= r expected)
                          :seeks @*seeks*
+                         :nexts @*nexts*
                          :range-filters (bm-fn)})))]
     (clojure.pprint/pprint (binding [*io-cost-ms* 0]
                              [(do-run-fn "cold-run")
