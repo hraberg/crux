@@ -64,7 +64,8 @@
       (let [n (unchecked-dec (unchecked-subtract end-rank n))]
         (when (neg? (Long/compareUnsigned n (.getLongCardinality bm)))
           (let [candidate (.select bm n)]
-            (when (neg? (Long/compareUnsigned candidate end))
+            (when (and (not (pos? (Long/compareUnsigned start candidate)))
+                       (neg? (Long/compareUnsigned candidate end)))
               (.removeLong bm candidate))))))
     bm))
 
