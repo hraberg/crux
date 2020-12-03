@@ -963,10 +963,11 @@
   (let [arg-bindings (rest arg-bindings)
         [e-var attr not-found] arg-bindings
         not-found? (= 3 (count arg-bindings))
-        e-result-index (.result-index ^VarBinding e-var)]
+        e-result-index (.result-index ^VarBinding e-var)
+        attr-buffer (mem/copy-to-unpooled-buffer (c/->id-buffer attr))]
     (fn pred-get-attr-constraint [index-snapshot {:keys [entity-resolver-fn] :as db} idx-id->idx ^List join-keys]
       (let [e (.get join-keys e-result-index)
-            vs (db/aev index-snapshot attr e nil entity-resolver-fn)
+            vs (db/aev index-snapshot attr-buffer e nil entity-resolver-fn)
             is-empty? (or (nil? vs) (.isEmpty ^Collection vs))]
         (if (and (= :collection return-type)
                  (not is-empty?))
